@@ -1,0 +1,37 @@
+train_config/check.py
+train_config/fix_configs.py
+delete_repo.py
+
+I2CL/configs/config_i2cl.py
+
+results/*
+/results/
+.idea/*
+I2CL/exps/*
+
+plot_brokenaxis1_Llama-3.1-8B/*
+plot_brokenaxis1_Qwen2.5-7B/*
+I2CL/plot1.py
+I2CL/plot2.py
+I2CL/plot3.py
+*.png
+*.txt
+
+# Cache / Logs
+.log/
+I2CL/.log
+*.log
+**/.log/
+
+.cache/
+__pycache__/
+**/__pycache__/
+*.pyc
+checkpoints
+
+wandb
+
+# 안쓰는 파일
+not_use
+function_vectors
+train_config

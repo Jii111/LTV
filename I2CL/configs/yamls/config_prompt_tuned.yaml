@@ -1,0 +1,52 @@
+# Evaluation configuration (converted from config_prompt_tuned.py)
+
+exp_name: 'exps'
+
+# GPU configuration (list of GPU IDs as strings)
+gpus: ['0']
+
+# Models to evaluate (list)
+models:
+  - 'Qwen/Qwen2.5-7B'
+
+# Datasets to evaluate (list, must match length of peft_names for zip pairing)
+datasets:
+  - 'agnews'
+  - 'sst2'
+  - 'sst5'
+  - 'hate_speech18'
+  - 'subj'
+  - 'trec'
+  - 'mr'
+  - 'dbpedia'
+
+# PEFT adapters to evaluate (list, must match length of datasets for zip pairing)
+peft_names:
+#  - "Mayfull/qwen-2.5-7b-agnews-1.0e-1-500-bs8"
+#  - "Mayfull/qwen-2.5-7b-sst2-1.0e-1-500-bs8"
+#  - "Mayfull/qwen-2.5-7b-sst5-1.0e-1-500-bs8"
+#  - "Mayfull/qwen-2.5-7b-hate_speech18-1.0e-1-500-bs8"
+#  - "Mayfull/qwen-2.5-7b-subj-1.0e-1-500-bs8"
+#  - "Mayfull/qwen-2.5-7b-trec-1.0e-1-500-bs8"
+#  - "Mayfull/qwen-2.5-7b-mr-1.0e-1-500-bs8"
+#  - "Mayfull/qwen-2.5-7b-dbpedia-1.0e-1-500-bs8"
+  - "Mayfull/llama-3.1-8-agnews-1.0e-1-500-bs8"
+  - "Mayfull/llama-3.1-8-sst2-1.0e-1-500-bs8"
+  - "Mayfull/llama-3.1-8-sst5-1.0e-1-500-bs8"
+  - "Mayfull/llama-3.1-8-hate_speech18-1.0e-1-500-bs8"
+  - "Mayfull/llama-3.1-8-subj-1.0e-1-500-bs8"
+  - "Mayfull/llama-3.1-8-trec-1.0e-1-500-bs8"
+  - "Mayfull/llama-3.1-8-mr-1.0e-1-500-bs8"
+  - "Mayfull/llama-3.1-8-dbpedia-1.0e-1-500-bs8"
+
+# Evaluation settings
+run_num: 1  # number of runs
+bs: 1  # batch size
+sample_method: 'uniform'  # sampling method
+metric: 'acc'  # evaluation metric
+seed: 42  # random seed
+
+# Model output settings
+return_logits: true
+logits_mode: 'first'
+use_cache: false
