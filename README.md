@@ -1,5 +1,5 @@
 # ICLTV
-## * run_baselin_all
+## * run_baseline_all
   ```
 (1) 주요 config 설정(모델, 태스크, num_shot 등)
 I2CL/configs/config_baseline_all.py
