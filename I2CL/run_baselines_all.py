@@ -124,7 +124,6 @@ def main(args):
         'test_result': {
             'zero_shot': [], 'few_shot': [], 'i2cl': [], 'ICLTV': [], 'fv': [], 'm2': [], 'm2_adaptive': []
         },
-        'val_result': {'zero_shot': [], 'few_shot': [], 'i2cl': [], 'ICLTV': [], 'fv': [], 'm2': [], 'm2_adaptive': []},
         'best_replace_layer': {'i2cl': [], 'ICLTV': [], 'fv': []},
         'i2cl_linear_coef': {},
         'time': {'i2cl': [], 'ICLTV': [], 'fv': [], 'm2': [], 'm2_adaptive': []}
@@ -141,10 +140,7 @@ def main(args):
 
         utils.set_seed(args.config['seed'] + run_id)
         # shared train queries cache per num_queries
-        m2_val_dict = {};
-        m2_test_dict = {};
-        m2a_val_dict = {};
-        m2a_test_dict = {}
+        m2_test_dict = {}; m2a_test_dict = {}
 
         demon, split_demon, demon_indices = train_dataset.gen_few_shot_demonstration(
             tokenizer=tokenizer,
@@ -168,36 +164,24 @@ def main(args):
         # Zero-shot baseline
         if run_id == 0 and args.config['run_baseline']:
             print("Evaluating zero-shot baseline...")
-            val_zero = val_evaluator.evaluate(
-                base_wrapper, tokenizer, demonstration='',
-                use_cache=args.config['use_cache']
-            )
             test_zero = test_evaluator.evaluate(
                 base_wrapper, tokenizer, demonstration='',
                 use_cache=args.config['use_cache']
             )
-            result_dict['val_result']['zero_shot'].append(val_zero)
             result_dict['test_result']['zero_shot'].append(test_zero)
-            print(f"Val zero-shot: {val_zero}")
             print(f"Test zero-shot: {test_zero}\n")
 
         # Few-shot baseline
         test_few_logits = test_few_labels = None
         if args.config['run_baseline']:
             print("Evaluating few-shot baseline...")
-            val_few = val_evaluator.evaluate(
-                base_wrapper, tokenizer, demonstration=baseline_demon,
-                use_cache=args.config['use_cache']
-            )
             test_few, test_few_logits, test_few_labels = test_evaluator.evaluate(
                 base_wrapper, tokenizer, demonstration=baseline_demon,
                 use_cache=args.config['use_cache'],
                 return_logits=True,
                 logits_mode=args.config['logits_mode']
             )
-            result_dict['val_result']['few_shot'].append(val_few)
             result_dict['test_result']['few_shot'].append(test_few)
-            print(f"Val few-shot: {val_few}")
             print(f"Test few-shot: {test_few}\n")
 
         # I2CL baseline
@@ -238,9 +222,6 @@ def main(args):
                     context_vector_dict, args.config,
                     base_wrapper.linear_coef
                     ):
-                val_i2cl = val_evaluator.evaluate(
-                    base_wrapper, tokenizer, demonstration='', use_cache=args.config['use_cache']
-                    )
                 test_i2cl, test_i2cl_logits, test_i2cl_labels = test_evaluator.evaluate(
                     base_wrapper, tokenizer, demonstration='',
                     use_cache=args.config['use_cache'], return_logits=args.config['return_logits'],
@@ -248,10 +229,8 @@ def main(args):
                     )
         i2cl_end = time.time()
 
-        result_dict['val_result']['i2cl'].append(val_i2cl)
         result_dict['test_result']['i2cl'].append(test_i2cl)
         result_dict['time']['i2cl'].append(i2cl_end - i2cl_start)
-        print(f"Val I2CL: {val_i2cl}")
         print(f"Test I2CL: {test_i2cl}\n")
 
         if args.config.get('compute_kl_divergence', False) and test_few_logits is not None:
@@ -295,10 +274,6 @@ def main(args):
 
         m1_start = time.time()
         with base_wrapper.replace_latent(context_vector_dict, [best_layer], args.config):
-            val_m1 = val_evaluator.evaluate(
-                base_wrapper, tokenizer, demonstration='',
-                use_cache=args.config['use_cache']
-            )
             test_m1, test_m1_logits, test_m1_labels = test_evaluator.evaluate(
                 base_wrapper, tokenizer, demonstration='',
                 use_cache=args.config['use_cache'],
@@ -306,10 +281,8 @@ def main(args):
                 logits_mode=args.config['logits_mode']
             )
         m1_end = time.time()
-        result_dict['val_result']['ICLTV'].append(val_m1)
         result_dict['test_result']['ICLTV'].append(test_m1)
         result_dict['time']['ICLTV'].append(m1_end - m1_start)
-        print(f"Val ICL TV: {val_m1}")
         print(f"Test ICL TV: {test_m1}\n")
 
         if args.config.get('compute_kl_divergence', False) and test_few_logits is not None:
@@ -336,8 +309,7 @@ def main(args):
 
         # TODO: model_config 체크
         model_fv, tokenizer_fv, model_config_fv = load_gpt_model_and_tokenizer(
-            model_name, device=args.device, revision=args.revision
-            )
+            model_name, device=args.device, revision=args.revision)
         dataset_fv['train'] = convert_basetask_to_icldataset(train_dataset, demon_indices)
         dataset_fv['validation'] = convert_basetask_to_icldataset(val_dataset)
         dataset_fv['test'] = convert_basetask_to_icldataset(test_dataset)
@@ -376,24 +348,14 @@ def main(args):
             )
 
         # 4. evaluate FV
-        # TODO: 지원님 여기 이렇게 하지 말고, LLAMA면 11인가 하고 QWEN이면 9인가 하나만 미리 정해져서 하는 걸로 해주세요.
-        if config['edit_layer'] == -1:  # sweep over all layers if edit_layer=-1
-            eval_edit_layer = [0, model_config_fv['n_layers']]
         if config['edit_layer'] == -2:
-            eval_edit_layer = [model_config_fv['n_layers'] // 3 - 1, model_config_fv['n_layers'] // 3 + 2]
+            eval_edit_layer = model_config_fv['n_layers']//3 
 
         utils.set_seed(args.config['seed'])
-        fv_results = {};
-        fv_logits = {};
+        fv_results = {}
+        fv_logits = {}
         fv_labels = {}
-        fv_results_val = {}
         if isinstance(eval_edit_layer, int):
-            fv_results_val[eval_edit_layer], = n_shot_eval(
-                dataset=dataset_fv, task_name=args.dataset_name, fv_vector=fv, edit_layer=eval_edit_layer,
-                n_shots=0, prefixes=args.prefixes, separators=args.separators, test_type='validation',
-                model=model_fv, model_config=model_config_fv, tokenizer=tokenizer_fv, filter_set=filter_set,
-                return_logits=False
-                )
             fv_results[eval_edit_layer], fv_logits[eval_edit_layer], fv_labels[eval_edit_layer] = n_shot_eval(
                 dataset=dataset_fv, task_name=args.dataset_name, fv_vector=fv, edit_layer=eval_edit_layer,
                 n_shots=0, prefixes=args.prefixes, separators=args.separators, test_type='test',
@@ -401,20 +363,9 @@ def main(args):
                 return_logits=True
                 )
             fv_results_file_suffix = f'_fv_layer_{eval_edit_layer}_sweep.json'
-        # TODO: 하나만 미리 정해져서 하기 때문에 이 부분은 없어야 합니다.
         else:
-            raise ValueError("To be changed")
-            # for edit_layer in range(eval_edit_layer[0], eval_edit_layer[1]):
-            #     fv_results_val[edit_layer] = n_shot_eval(dataset=dataset_fv, task_name = args.dataset_name, fv_vector=fv, edit_layer=edit_layer, 
-            #                                             n_shots=0, prefixes=args.prefixes, separators=args.separators, test_type='validation',
-            #                                             model=model_fv, model_config=model_config_fv, tokenizer=tokenizer_fv, filter_set=filter_set,
-            #                                             return_logits = True)
-            #     fv_results[edit_layer], fv_logits[edit_layer], fv_labels[edit_layer] = n_shot_eval(dataset=dataset_fv, task_name = args.dataset_name, fv_vector=fv, edit_layer=edit_layer, 
-            #                                             n_shots=0, prefixes=args.prefixes, separators=args.separators, test_type='test',
-            #                                             model=model_fv, model_config=model_config_fv, tokenizer=tokenizer_fv, filter_set=filter_set,
-            #                                             return_logits = True)
-            #     
-            # fv_results_file_suffix = f'_fv_layer_sweep.json'
+            raise ValueError("Not allowed to sweep layers in this experiment")
+
 
         fv_results_file_name = make_valid_path_name(f'{args.save_dir}/' + fv_results_file_suffix)
         args.zs_results_file_name = fv_results_file_name
@@ -422,20 +373,15 @@ def main(args):
         with open(fv_results_file_name, 'w') as results_file:
             json.dump(fv_result_dict, results_file, indent=2)
 
-        # TODO: 마찬가지로 best val 이런 거는 불필요 합니다. 지금은 figure 그리는 거랑 목적이 다릅니다. 그냥 apple to apple로 대결하는 건데 이렇게 해줄 이유가 없습니다.
-        best_layer_val = max(fv_results_val, key=lambda l: get_acc(fv_results_val[l]))
         best_layer = max(fv_results, key=lambda l: get_acc(fv_results[l]))
 
-        val_fv = get_acc(fv_results_val[best_layer_val])
         test_fv, test_fv_logits, test_fv_labels = get_acc(fv_results[best_layer]), fv_logits[best_layer], fv_labels[
             best_layer]
 
         fv_end = time.time()
-        result_dict['val_result']['fv'].append(val_fv)
         result_dict['test_result']['fv'].append(test_fv)
         result_dict['best_replace_layer']['fv'].append(best_layer)
         result_dict['time']['fv'].append(fv_end - fv_start)
-        print(f"Val FV: {val_fv}")
         print(f"Test FV: {test_fv}\n")
 
         if args.config.get('compute_kl_divergence', False) and test_few_logits is not None:
@@ -477,10 +423,6 @@ def main(args):
                 print("M2: evaluating constant vector...")
                 m2_start = time.time()
                 with m2_wrapper.inject_m2_task_vector(task_vector):
-                    val_m2 = val_evaluator.evaluate(
-                        m2_wrapper, tokenizer, demonstration='',
-                        use_cache=args.config['use_cache']
-                    )
                     test_m2, test_m2_logits, test_m2_labels = test_evaluator.evaluate(
                         m2_wrapper, tokenizer, demonstration='',
                         use_cache=args.config['use_cache'],
@@ -488,10 +430,8 @@ def main(args):
                         logits_mode=args.config['logits_mode']
                     )
                 m2_end = time.time()
-                utils.nested_set(m2_val_dict, [q_key, lam_key], val_m2)
                 utils.nested_set(m2_test_dict, [q_key, lam_key], test_m2)
                 result_dict['time']['m2'].append(m2_end - m2_start)
-                print(f"Val M2({q_key}, {lam_key}): {val_m2}")
                 print(f"Test M2({q_key}, {lam_key}): {test_m2}\n")
 
                 if args.config.get('compute_kl_divergence', False) and test_few_logits is not None:
@@ -524,10 +464,6 @@ def main(args):
                 print("M2-Adaptive: evaluating...")
                 m2a_start = time.time()
                 with m2_adaptive_wrapper.inject_adaptive_task_vector(adaptive_vectors):
-                    val_m2a = val_evaluator.evaluate(
-                        m2_adaptive_wrapper, tokenizer, demonstration='',
-                        use_cache=args.config['use_cache']
-                    )
                     test_m2a, test_m2a_logits, test_m2a_labels = test_evaluator.evaluate(
                         m2_adaptive_wrapper, tokenizer, demonstration='',
                         use_cache=args.config['use_cache'],
@@ -535,10 +471,8 @@ def main(args):
                         logits_mode=args.config['logits_mode']
                     )
                 m2a_end = time.time()
-                utils.nested_set(m2a_val_dict, [q_key, lam_key], val_m2a)
                 utils.nested_set(m2a_test_dict, [q_key, lam_key], test_m2a)
                 result_dict['time']['m2_adaptive'].append(m2a_end - m2a_start)
-                print(f"Val M2-Adaptive: {val_m2a}")
                 print(f"Test M2-Adaptive: {test_m2a}\n")
 
                 if args.config.get('compute_kl_divergence', False) and test_few_logits is not None:
@@ -556,9 +490,7 @@ def main(args):
                         os.path.join(args.save_dir, f"{args.run_name}_m2_adaptive_kl.png")
                     )
 
-        result_dict['val_result']['m2'].append(m2_val_dict)
         result_dict['test_result']['m2'].append(m2_test_dict)
-        result_dict['val_result']['m2_adaptive'].append(m2a_val_dict)
         result_dict['test_result']['m2_adaptive'].append(m2a_test_dict)
 
         with open(os.path.join(args.save_dir, 'result_dict.json'), 'w') as f:
