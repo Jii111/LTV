@@ -1,30 +1,24 @@
 config = {}
 
 ### Main Configuration ###
-config['exp_name'] = 'exps/baseline_all_test23'  # M2 experiment directory
+config['exp_name'] = 'exps/baseline_all_test_13'  # M2 experiment directory
 config['gpus'] = ['0']
 config['models'] = ['Qwen/Qwen2.5-7B']
-config['datasets'] = ['sst2'] 
-config['shot_per_class'] = 5 # number of shots (NOT per class)
+config['datasets'] = ['sst5','trec','mr'] 
+config['shot_per_class'] = 30 # number of shots (NOT per class)
 config['bs'] = 4  # batch size
 ###
 
 # Experiment settings
 config['return_logits'] = True
 config['logits_mode'] = 'first'
-config['run_num'] = 1
+config['run_num'] = 5
 config['seed'] = 42
 config['demo_seed'] = 12
 config['run_baseline'] = True
 config['metric'] = 'acc'  # 'acc', 'macro_f1'
 config['load_in_8bit'] = True
 config['use_cache'] = False
-
-# M2-specific settings
-# TODO: 이거 쓰이는 건가요? 아니라면 지워주시길
-config['method'] = 'M2'
-config['all_layers'] = True  # Use all layers for task vector extraction
-config['demo_masking'] = True  # Enable demo masking
 
 # Task vector extraction
 config['num_train_queries'] = [32, 64, 128, 256]  # Number of training queries for task vector learning
@@ -41,7 +35,7 @@ config['tok_pos'] = 'last'  # Token position for extraction
 
 # Data settings
 config['val_data_num'] = 32
-config['test_data_num'] = None
+config['test_data_num'] = 8000
 config['sample_method'] = 'uniform'  # 'random', 'uniform'
 config['use_instruction'] = False
 config['add_extra_query'] = True
@@ -53,7 +47,7 @@ config['save_task_vectors'] = False
 config['evaluate_reconstruction'] = False  # Evaluate reconstruction quality on val set
 
 # I2CL baseline settings
-config['train_cali'] = False
+#config['train_cali'] = False
 config['init_value'] = [0.1, 1.0]  # linear and constraint: [0.1, 1.0], add: [0.1]
 
 config['layer'] = 'all' # all, early, mid, late
@@ -76,7 +70,6 @@ config['wd'] = 1e-3
 config['cali_example_method'] = 'normal' # 'normal', 'random_label'
 
 # function vector baseline settings
-# TODO: 마찬가지로 모델따라 layer를 맞춰주세요.
 config['edit_layer']=-2 
 config['n_top_heads']=10 
 config['n_mean_activations_trials']=20 
