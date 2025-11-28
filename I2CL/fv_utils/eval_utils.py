@@ -352,11 +352,37 @@ def n_shot_eval(dataset, task_name, fv_vector, edit_layer: int, n_shots: int, mo
     if pred_filepath:
         pred_file.close()
 
-    
     if return_logits == True:
         if len(all_preds) > 0:
             overall_acc = np.mean([int(p == l) for p, l in zip(all_preds, all_labels)])
-            results["acc"] = overall_acc
+            
+            num_class=len(ans_txt_list)
+            TP = [0] * num_class
+            FP = [0] * num_class
+            FN = [0] * num_class
+
+            for pred_label, true_label in zip(all_preds, all_labels):
+                if pred_label == true_label:
+                    TP[true_label] += 1
+                else:
+                    FP[pred_label] += 1
+                    FN[true_label] += 1
+
+            precision = []
+            recall = []
+            f1_list = []
+            for i in range(num_class):
+                prec = TP[i] / (TP[i] + FP[i]) if TP[i] + FP[i] > 0 else 0
+                rec = TP[i] / (TP[i] + FN[i]) if TP[i] + FN[i] > 0 else 0
+                f1 = 2 * prec * rec / (prec + rec) if prec + rec > 0 else 0
+
+                precision.append(prec)
+                recall.append(rec)
+                f1_list.append(f1)
+
+            macro_f1 = sum(f1_list) / num_class
+
+            results["acc"] = {'acc': overall_acc, 'macro_f1': macro_f1}
         else:
             print("++ no accs")
         
@@ -364,7 +390,6 @@ def n_shot_eval(dataset, task_name, fv_vector, edit_layer: int, n_shots: int, mo
             all_pred_logits = torch.stack(all_pred_logits, dim=0)
         
         results["inputs"] = all_inputs
-
         return results, all_pred_logits, all_labels
     else:
         return results
