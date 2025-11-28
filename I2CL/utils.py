@@ -71,10 +71,56 @@ def load_model_tokenizer(model_name, device, output_hidden_states=True, load_in_
 
     if not load_in_8bit:
         model = model.to(device)
+        
     config = AutoConfig.from_pretrained(model_name)
     tokenizer.pad_token = tokenizer.eos_token
     tokenizer.padding_side = 'left'
-    return model, tokenizer, config
+    
+    if "qwen" in model_name.lower():
+        MODEL_CONFIG = {
+            "n_heads": model.config.num_attention_heads,
+            "n_layers": model.config.num_hidden_layers,
+            "resid_dim": model.config.hidden_size,
+            "name_or_path": model.config._name_or_path,
+            "attn_hook_names": [
+                f"model.layers.{layer}.self_attn.o_proj"
+                for layer in range(model.config.num_hidden_layers)
+            ],
+            "layer_hook_names": [
+                f"model.layers.{layer}"
+                for layer in range(model.config.num_hidden_layers)
+            ],
+            "prepend_bos": True
+        }
+
+    elif "llama" in model_name.lower():
+        MODEL_CONFIG = {
+            "n_heads": model.config.num_attention_heads,
+            "n_layers": model.config.num_hidden_layers,
+            "resid_dim": model.config.hidden_size,
+            "name_or_path": model.config._name_or_path,
+            "attn_hook_names": [
+                f"model.layers.{layer}.self_attn.o_proj"
+                for layer in range(model.config.num_hidden_layers)
+            ],
+            "layer_hook_names": [
+                f"model.layers.{layer}"
+                for layer in range(model.config.num_hidden_layers)
+            ],
+            "prepend_bos": True
+        }
+    else:
+        MODEL_CONFIG = {
+        "n_heads": model.config.num_attention_heads,
+        "n_layers": model.config.num_hidden_layers,
+        "resid_dim": model.config.hidden_size,
+        "name_or_path": model.config._name_or_path,
+        "attn_hook_names": [],
+        "layer_hook_names": [],
+        "prepend_bos": False
+    }
+    
+    return model, tokenizer, config, MODEL_CONFIG
 
 
 def load_custom_model_tokenizer(model_name, device, output_hidden_states=True, load_in_8bit=False, method='M3'):
