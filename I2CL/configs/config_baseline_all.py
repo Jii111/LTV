@@ -1,7 +1,7 @@
 config = {}
 
 ### Main Configuration ###
-config['exp_name'] = 'exps/baseline_all_test_13'  # M2 experiment directory
+config['exp_name'] = 'exps/baseline_all_test_15'  # M2 experiment directory
 config['gpus'] = ['0']
 config['models'] = ['Qwen/Qwen2.5-7B']
 config['datasets'] = ['sst5','trec','mr'] 

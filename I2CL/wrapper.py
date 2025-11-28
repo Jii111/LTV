@@ -468,7 +468,7 @@ class ModelWrapper(nn.Module):
         # plot loss curve and save it
         utils.plot_loss_curve(loss_list, save_dir + f'/{run_name}_loss_curve.png')
 
-    def init_strength(self, config):
+    def init_strength(self, config, cali_train=None):
         # get linear_coef size
         if type(config['layer']) == str:
             if config['layer'] == 'all':
@@ -500,9 +500,9 @@ class ModelWrapper(nn.Module):
         # init linear_coef
         linear_coef = torch.zeros(param_size, device=self.device)
         linear_coef += torch.tensor(config['init_value'], device=self.device)
-        if config['train_cali']==False:
+        if cali_train==False:
             self.linear_coef = nn.Parameter(linear_coef,requires_grad=False)
-        else:
+        elif cali_train==True:
             self.linear_coef = nn.Parameter(linear_coef)
         print(f"linear_coef shape: {self.linear_coef.shape}\n")
         if not self.linear_coef.is_leaf:
