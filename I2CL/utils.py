@@ -363,7 +363,6 @@ class PCA(nn.Module):
         assert hasattr(self, "components_"), "PCA must be fit before use."
         return torch.matmul(Y, self.components_) + self.mean_
     
-
 class ContextSolver:
     def __init__(self, task_name, tokenizer=None):
         # assert task_name in ['sst2', 'trec', 'agnews', 'emo']
@@ -442,7 +441,6 @@ class ContextSolver:
                                                          match_before=match_before)
         return mask
     
-
 class TensorStrFinder:
     def __init__(self, tokenizer):
         self.tokenizer = tokenizer
@@ -490,8 +488,7 @@ class TensorStrFinder:
             s_tensor in list_s_tensor]
         mask_tensor = functools.reduce(torch.logical_or, mask_tensor_list)
         return mask_tensor
-    
-# ✅ 수정
+
 def compute_kl_divergence(logits_p, logits_q, is_qwen=False):
     probs_p = F.softmax(logits_p, dim=-1)
     probs_q = F.softmax(logits_q, dim=-1)
@@ -520,3 +517,96 @@ def nested_set(d, keys, value):
             d[k] = {}
         d = d[k]
     d[keys[-1]] = value
+    
+def convert_to_svdataset(split_demon, train_dataset, demon_indices, val_dataset, test_dataset, tokenizer, run_id, args):
+    def norm(demons):
+        out = []
+        for e in demons:
+            if isinstance(e, dict):
+                out.append(e)
+            elif isinstance(e, str):
+                if "Sentiment:" in e:
+                    inp, outp = e.split("Sentiment:")
+                    out.append({"input": inp.strip() + "\nSentiment:", "output": outp.strip()})
+                else:
+                    raise ValueError(f"[ERROR] unknown demon string format: {e}")
+            else:
+                raise ValueError(f"[ERROR] invalid demon type: {type(e)}")
+        return out
+    
+    def clean_input(text):
+        if ":" in text:
+            text = text.split(":", 1)[1]
+        if "\n" in text:
+            text = text.split("\n", 1)[0]
+        return text.strip()
+
+    _, valid_split_demon = val_dataset.gen_few_shot_demonstration(
+        tokenizer=tokenizer,
+        shot_num=min(len(val_dataset), args.config['val_data_num']),
+        max_demonstration_tok_len=min(args.val_max_token, args.test_max_token),
+        add_extra_query=args.config['add_extra_query'],
+        example_separator=args.config['example_separator'],
+        return_data_index=False,
+        seed=args.config['demo_seed'] + run_id,
+        index_info=None,
+        sv_data=True
+    )
+    valid_split_demon = norm(valid_split_demon)
+
+    _, test_split_demon = test_dataset.gen_few_shot_demonstration(
+        tokenizer=tokenizer,
+        shot_num=min(len(test_dataset), args.config['test_data_num']),
+        max_demonstration_tok_len=min(args.val_max_token, args.test_max_token),
+        add_extra_query=args.config['add_extra_query'],
+        example_separator=args.config['example_separator'],
+        return_data_index=False,
+        seed=args.config['demo_seed'] + run_id,
+        index_info=None,
+        sv_data=True
+    )
+    test_split_demon = norm(test_split_demon)[:-1]
+    
+    all_idx = list(range(len(train_dataset.all_data)))
+    candidate_idx = [i for i in all_idx if i not in demon_indices]
+
+    if len(candidate_idx) < 10:
+        raise ValueError("train_dummy_split_demon 후보 index 부족")
+
+    dummy_idx = random.sample(candidate_idx, 10)
+
+    train_dummy_split_demon = []
+    for idx in dummy_idx:
+        input_str, ans_str, label = train_dataset.apply_template(train_dataset.all_data[idx])
+        train_dummy_split_demon.append({
+            "input": input_str,
+            "output": ans_str[label]
+        })
+
+    # -------------------------
+    # 3) TRAIN DUMMY demon (10개 생성)
+    # demon_indices 제외한 index 중 랜덤 선택
+    # -------------------------
+    all_idx = list(range(len(train_dataset.all_data)))
+    candidate_idx = [i for i in all_idx if i not in demon_indices]
+
+    if len(candidate_idx) < 10:
+        raise ValueError("Not enough candidates to sample train_dummy_split_demon")
+
+    dummy_idx = random.sample(candidate_idx, 10)
+
+    train_dummy_split_demon = []
+    for idx in dummy_idx:
+        input_str, ans_str, label = train_dataset.apply_template(train_dataset.all_data[idx])
+        train_dummy_split_demon.append({
+            "input": input_str,
+            "output": ans_str[label]
+        })
+        
+    split_demon = norm(split_demon)
+    split_demon = split_demon[:-1]
+    for data in [split_demon, valid_split_demon, test_split_demon, train_dummy_split_demon]:
+        for d in data:
+            d["input"] = clean_input(d["input"])
+
+    return split_demon, train_dummy_split_demon, valid_split_demon, test_split_demon

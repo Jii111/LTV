@@ -13,7 +13,19 @@ setup so every method uses exactly the same data slices.
 import argparse
 import copy
 import gc
+from sv_utils.TVeval import ICLVectorEvaluator
+from sv_utils.TVframework import Evaluator
+from sv_utils.utils import set_rand_seed
 
+import argparse
+import copy
+import json
+import os
+import sys
+import time
+import random
+import torch
+from tqdm import tqdm
 import evaluator as ev
 import my_datasets as md
 import utils
@@ -85,16 +97,6 @@ def main(args):
     print(f"Baseline Suite: {args.model_name} on {args.dataset_name}")
     print(f"{'=' * 60}\n")
 
-    model, tokenizer, model_config, model_config_fv = utils.load_model_tokenizer(
-        args.model_name, args.device, output_hidden_states=True
-    )
-
-    base_wrapper = utils.get_model_wrapper(
-        args.model_name, model, tokenizer, model_config, args.device
-    )
-    m2_wrapper = M2Wrapper(model, tokenizer, model_config, args.device)
-    m2_adaptive_wrapper = M2AdaptiveWrapper(model, tokenizer, model_config, args.device)
-
     train_dataset = md.get_dataset(
         args.dataset_name, split='train', max_data_num=None,
         seed=args.config['seed']
@@ -112,24 +114,39 @@ def main(args):
         seed=args.config['seed']
         )
 
+    args.shot_num = args.config['shot_per_class']
+    args.format_dict = {'eos': args.config['eos'], 'proj_tokens': args.config['proj_tokens']}
+    metric = {'top_k': {'max_top': 1}}
+    
+    model, tokenizer, model_config, model_config_fv = utils.load_model_tokenizer(
+            args.model_name, args.device, output_hidden_states=True
+        )
+
+    base_wrapper = utils.get_model_wrapper(
+        args.model_name, model, tokenizer, model_config, args.device
+    )
+    m2_wrapper = M2Wrapper(model, tokenizer, model_config, args.device)
+    m2_adaptive_wrapper = M2AdaptiveWrapper(model, tokenizer, model_config, args.device)
+    
     args.val_max_token = val_dataset.get_max_demonstration_token_length(tokenizer)
     args.test_max_token = test_dataset.get_max_demonstration_token_length(tokenizer)
-    args.shot_num = args.config['shot_per_class']
 
+    # TODO: evaluator 정리
     val_evaluator = ev.Evaluator(val_dataset, batch_size=args.config['bs'])
     test_evaluator = ev.Evaluator(test_dataset, batch_size=args.config['bs'])
+     
 
     result_dict = {
         'demon': {},
         'test_result': {
-            'zero_shot': [], 'few_shot': [], 'i2cl_default': [], 'i2cl_train': [], 'ICLTV': [], 'fv': [], 'm2': [], 'm2_adaptive': []
+            'zero_shot': [], 'few_shot': [], 'i2cl_default': [], 'i2cl_train': [], 'ICLTV': [], 'fv': [], 'state vector': [], 'm2': [], 'm2_adaptive': []
         },
         'best_replace_layer': {'i2cl_default': [],'i2cl_train': [], 'ICLTV': [], 'fv': []},
         'i2cl_linear_coef(default)': {},
         'i2cl_linear_coef(train)': {},
-        'time': {'i2cl_default': [], 'i2cl_train': [], 'ICLTV': [], 'fv': [], 'm2': [], 'm2_adaptive': []}
+        'time': {'i2cl_default': [], 'i2cl_train': [], 'ICLTV': [], 'fv': [], 'state vector': [], 'm2': [], 'm2_adaptive': []}
     }
-    kl_dict = {'i2cl_default': {}, 'i2cl_train': {},'ICLTV': {}, 'fv': {}, 'm2': {}, 'm2_adaptive': {}}
+    kl_dict = {'i2cl_default': {}, 'i2cl_train': {},'ICLTV': {}, 'fv': {},  'state vector': {},'m2': {}, 'm2_adaptive': {}}
 
     cv_save_dict = {}
 
@@ -171,7 +188,7 @@ def main(args):
             )
             result_dict['test_result']['zero_shot'].append(test_zero)
             print(f"Test zero-shot: {test_zero}\n")
-
+        
         # Few-shot baseline
         test_few_logits = test_few_labels = None
         if args.config['run_baseline']:
@@ -185,7 +202,8 @@ def main(args):
             result_dict['test_result']['few_shot'].append(test_few)
             print(f"Test few-shot: {test_few}\n")
 
-        # I2CL baseline
+        '''
+        ################## I2CL baseline ##################
         print("Evaluating ICL TV baseline...")
         i2cl_start = time.time()
         temp_demon_list, temp_result_list = [], []
@@ -315,7 +333,7 @@ def main(args):
                 "kl_values": kl_values_i2cl.tolist()
             }
 
-        # ICL task vector baseline
+        ################## ICL task vector baseline ##################
         print("Evaluating ICL TV baseline...")
         m1_start = time.time()
         all_latent_dicts = []
@@ -357,7 +375,7 @@ def main(args):
                 "kl_values": kl_values_m1.tolist()
             }
 
-        # FV baseline
+        ################## FV baseline ##################
         print("Evaluating FV baseline...")
         fv_start = time.time()
         dataset_fv = {}
@@ -368,7 +386,7 @@ def main(args):
         args.separators = config['separators']
         args.revision = config['revision']
 
-        # TODO: model_config 체크, model_config_fv
+        # TODO: model_config 체크
         dataset_fv['train'] = convert_basetask_to_icldataset(train_dataset, demon_indices)
         dataset_fv['validation'] = convert_basetask_to_icldataset(val_dataset)
         dataset_fv['test'] = convert_basetask_to_icldataset(test_dataset)
@@ -405,7 +423,7 @@ def main(args):
         fv, top_heads = compute_universal_function_vector(
             mean_activations, model, model_config=model_config_fv, n_top_heads=args.n_top_heads
             )
-
+        '''
         # 4. evaluate FV
         if config['edit_layer'] == -2:
             if 'Qwen2.5-7B' in args.model_name:
@@ -414,7 +432,7 @@ def main(args):
                 eval_edit_layer = 11
             else: # in case for other model
                 eval_edit_layer = model_config_fv['n_layers']//3 
-
+        '''
         utils.set_seed(args.config['seed'])
         fv_results = {}
         fv_logits = {}
@@ -458,7 +476,80 @@ def main(args):
                 "mean_kl": mean_kl_fv,
                 "kl_values": kl_values_fv.tolist()
             }
+        '''
+        
+        print("Evaluating State Vector baseline...")
+        sv_start = time.time()
+            
+        svevaluator = ICLVectorEvaluator(metric, Evaluator(args.model_name, devices=None)) 
+        dev_data, dummy_test, valid_data, test_data = utils.convert_to_svdataset(split_demon, train_dataset, demon_indices, val_dataset, test_dataset, tokenizer, run_id, args)
+        dummy_test = dummy_test[0] # TODO: 1 train query setting check
+        print("test dataset len 비교")
+        print(len(test_dataset))
+        print(len(test_data)) 
 
+        iv_result = {}
+
+        for i in range(len(test_data)):
+            test_data[i]['demon'] = []
+
+        acc, _ = svevaluator.single_ICL_test(test_data, format_dict=args.format_dict)
+        print("ZS acc : ", acc)
+
+        for i in range(len(test_data)):
+            test_data[i]['demon'] = dev_data
+        acc, _ = svevaluator.single_ICL_test(test_data, format_dict=args.format_dict)
+        print('ICL baseline acc : ', acc)
+        print()
+        
+        nshot, fshot = ('zs', False)
+            
+        run_name = f"{nshot}_raw_layer{eval_edit_layer}"
+        optimizer_weight = [[1, 2, 4, 8, 16, 0]]
+        optimizer_config = {"fix-one-step": {"lr": [1], "weight": optimizer_weight}}
+        label_info = train_dataset.get_dmonstration_template()['options']
+        test_sv, test_sv_logits, test_sv_labels, acc = svevaluator.single_atv_test(dummy_queries=[valid_data[0]],
+                                                dev_data=[dev_data],
+                                                test_data=test_data, class_texts = label_info,
+                                                layer_indices=list(range(eval_edit_layer + 1)),
+                                                optimizer_config = optimizer_config,
+                                                fs_eval=fshot,
+                                                shuffle_labels=False,
+                                                intervention_mode='add#0#1',
+                                                add_to='atten',
+                                                question_prompt=args.config['question_prompt'],
+                                                format_dict=args.format_dict,
+                                                return_logits=True)
+        for k, v in acc.items():
+            iv_result[run_name + '_' + k] = v[0]
+            print(run_name + '_' + k, v[0])
+
+        sv_end = time.time()
+        result_dict['test_result']['state vector'].append(test_sv)
+        result_dict['time']['state vector'].append(sv_end - sv_start)
+        print(f"Test State Vector: {test_sv}\n")
+
+        if args.config.get('compute_kl_divergence', False) and test_few_logits is not None:
+            assert test_few_labels == test_sv_labels, "Label mismatch between few-shot and FV results!"
+            mean_kl_sv, kl_values_sv = utils.compute_kl_divergence(
+                test_few_logits, test_sv_logits, is_qwen='Qwen' in args.model_name
+            )
+            print(f"KL divergence (Few-shot vs FV): {mean_kl_sv:.4f}")
+            kl_dict['state vector'][args.run_name] = {
+                    "mean_kl": mean_kl_sv,
+                    "kl_values": kl_values_sv.tolist()
+                }
+        
+        with open(os.path.join(args.save_dir, 'result_dict.json'), 'w') as f:
+            json.dump(result_dict, f, indent=4)
+        if kl_dict['state vector']:
+            with open(os.path.join(args.save_dir, 'kl_divergence.json'), 'w') as f:
+                json.dump(kl_dict, f, indent=4)
+                
+        del svevaluator, mean_kl_sv, kl_values_sv, test_sv_logits
+        gc.collect()
+        torch.cuda.empty_cache()
+        '''
         for num_queries in args.config['num_train_queries']:
             q_key = f"{num_queries}_queries"
             exclude_demo = set(demon_indices) if demon_indices is not None else set()
@@ -571,8 +662,9 @@ def main(args):
         if kl_dict['i2cl_default'] or kl_dict['i2cl_train'] or kl_dict['ICLTV'] or kl_dict['fv'] or kl_dict['m2'] or kl_dict['m2_adaptive']:
             with open(os.path.join(args.save_dir, 'kl_divergence.json'), 'w') as f:
                 json.dump(kl_dict, f, indent=4)
+'''
 
-    del base_wrapper, m2_wrapper, m2_adaptive_wrapper, model, tokenizer
+    del mean_activations, base_wrapper, m2_wrapper, m2_adaptive_wrapper, model, tokenizer
     del train_dataset, val_dataset, test_dataset
     gc.collect()
     torch.cuda.empty_cache()

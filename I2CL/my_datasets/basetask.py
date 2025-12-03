@@ -93,7 +93,7 @@ class BaseTask(Dataset):
     def gen_few_shot_demonstration(self, tokenizer, shot_num, max_demonstration_tok_len=1e6,
                                    add_extra_query=False, example_separator='\n', 
                                    return_data_index=False, gen_example_method='normal', seed=0,
-                                   index_info=None):
+                                   index_info=None, sv_data=None):
                                     
         """
         This function is used to generate few-shot demonstration.
@@ -126,6 +126,8 @@ class BaseTask(Dataset):
             sample_indexes = index_info
         elif class_num is None:  # random sample data
             sample_indexes = random.sample(range(len(self.all_data)), shot_num)
+        elif sv_data:
+            sample_indexes = list(range(shot_num))
         else: # uniform sample data from each class
             sample_indexes = []
             # split sample number into each class equally, if not possible, sample as many as possible
@@ -134,7 +136,6 @@ class BaseTask(Dataset):
             # random shuffle the sample indexes
             random.shuffle(sample_indexes)  
 
-        print(f"++totally {len(sample_indexes)}-shot exp")
         for index in sample_indexes:
             input_str, ans_str, label = self.apply_template(self.all_data[index])
             ans = ans_str[label]
@@ -156,7 +157,11 @@ class BaseTask(Dataset):
             else:
                 raise ValueError("Unknown demonstration example generation method!")
             single_example = single_example + example_separator
-            demonstration_expample_list.append(single_example)
+            
+            if sv_data:
+                demonstration_expample_list.append({"input": input_str,"output": ans})
+            else:
+                demonstration_expample_list.append(single_example)
             
         if add_extra_query:  # add a random query at the end of demonstration
             extra_qeury, _, _ = self.apply_template(self.all_data[random.randint(0, len(self.all_data))])
@@ -166,13 +171,6 @@ class BaseTask(Dataset):
         # check length of demonstration token
         encoded_inputs = tokenizer(demonstration, return_tensors="pt", padding=True, truncation=False)
         assert len(encoded_inputs['input_ids'][0]) < max_demonstration_tok_len, "Demonstration token length should be smaller than the maximum demonstration token length!"
-
-        # print("++debugging++") # 수정
-        # print("len(encoded_inputs : ",len(encoded_inputs['input_ids'][0]))
-        # print("is len(encoded_inputs) < max_demonstration_tok_len ? ", len(encoded_inputs['input_ids'][0]) < max_demonstration_tok_len)
-        # print()
-        
-        # print(f"Generated {shot_num}-shot demonstration.")
         
         if return_data_index:
             return demonstration, demonstration_expample_list, sample_indexes

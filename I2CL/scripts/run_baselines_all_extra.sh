@@ -27,7 +27,7 @@ echo "==========================================" | tee -a "$LOG_FILE"
 echo "Starting baseline pipeline" | tee -a "$LOG_FILE"
 echo "==========================================" | tee -a "$LOG_FILE"
 
-CMD="cd $I2CL_DIR && python run_baselines_all.py --config_path $CONFIG_PATH"
+CMD="cd $I2CL_DIR && python run_baselines_all_extra.py --config_path $CONFIG_PATH"
 echo "Command: $CMD" | tee -a "$LOG_FILE"
 echo "==========================================" | tee -a "$LOG_FILE"
 

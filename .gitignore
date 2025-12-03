@@ -8,14 +8,19 @@ results/*
 /results/
 .idea/*
 I2CL/exps/*
+ICL-State-Vector
 
 plot_brokenaxis1_Llama-3.1-8B/*
 plot_brokenaxis1_Qwen2.5-7B/*
-I2CL/plot1.py
-I2CL/plot2.py
-I2CL/plot3.py
+I2CL/plot1_corr.py
+I2CL/plot2_corr.py
+I2CL/plot3_corr.py
+I2CL/plot4_corr.py
+I2CL/plot1_exp.py
 *.png
 *.txt
+*.svg
+extract_maintable_result.py
 
 # Cache / Logs
 .log/
@@ -35,3 +40,4 @@ wandb
 not_use
 function_vectors
 train_config
+ICL-State-Vector

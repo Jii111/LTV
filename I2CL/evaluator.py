@@ -159,18 +159,20 @@ class Evaluator(nn.Module):
                 gv.ATTN_MASK_END = pred_loc
                 if use_cache:
                     attn_mask = torch.cat([demon_attn_mask, attn_mask], dim=1)
-                    output = model(
-                        input_ids=input_ids, attention_mask=attn_mask,
-                        past_key_values=demon_past_key_values, use_cache=use_cache,
-                        return_head_outputs=return_head_outputs,
-                        return_q_states=return_q_states
-                    )
+                    with torch.no_grad():
+                        output = model(
+                            input_ids=input_ids, attention_mask=attn_mask,
+                            past_key_values=demon_past_key_values, use_cache=use_cache,
+                            return_head_outputs=return_head_outputs,
+                            return_q_states=return_q_states
+                        )
                 else:
-                    output = model(
-                        input_ids=input_ids, attention_mask=attn_mask, use_cache=False,
-                        return_head_outputs=return_head_outputs,
-                        return_q_states=return_q_states
-                    )
+                    with torch.no_grad():
+                        output = model(
+                            input_ids=input_ids, attention_mask=attn_mask, use_cache=False,
+                            return_head_outputs=return_head_outputs,
+                            return_q_states=return_q_states
+                        )
                 logits = output.logits
 
                 # DEBUGGING: Print output shape for first batch only

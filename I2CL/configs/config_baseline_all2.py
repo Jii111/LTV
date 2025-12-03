@@ -1,18 +1,19 @@
 config = {}
 
 ### Main Configuration ###
-config['exp_name'] = 'exps/baseline_all_test_11'  # M2 experiment directory
+config['exp_name'] = 'exps/baseline_all_test_15'  # M2 experiment directory
 config['gpus'] = ['0']
-config['models'] = ['meta-llama/Llama-3.1-8B']
-config['datasets'] = ['sst2'] 
+config['models'] = ['Qwen/Qwen2.5-7B']
+config['datasets'] = ['dbpedia'] 
 config['shot_per_class'] = 30 # number of shots (NOT per class)
-config['bs'] = 4  # batch size
+config['bs'] = 1  # batch size
+###
 
 # Experiment settings
 config['return_logits'] = True
 config['logits_mode'] = 'first'
 config['run_num'] = 5
-config['seed'] = 42
+config['seed'] = 82
 config['demo_seed'] = 12
 config['run_baseline'] = True
 config['metric'] = 'acc'  # 'acc', 'macro_f1'
@@ -44,11 +45,6 @@ config['example_separator'] = '\n'
 config['compute_kl_divergence'] = True
 config['save_task_vectors'] = False
 config['evaluate_reconstruction'] = False  # Evaluate reconstruction quality on val set
-
-# SV baseline settings
-config['question_prompt'] = "{input}"
-config["eos"] = "\n\n"
-config["proj_tokens"] = "→" #\n 같은디?
 
 # I2CL baseline settings
 #config['train_cali'] = False
