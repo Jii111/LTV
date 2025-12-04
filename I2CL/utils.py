@@ -519,27 +519,30 @@ def nested_set(d, keys, value):
     d[keys[-1]] = value
     
 def convert_to_svdataset(split_demon, train_dataset, demon_indices, val_dataset, test_dataset, tokenizer, run_id, args):
-    def norm(demons):
-        out = []
-        for e in demons:
-            if isinstance(e, dict):
-                out.append(e)
-            elif isinstance(e, str):
-                if "Sentiment:" in e:
-                    inp, outp = e.split("Sentiment:")
-                    out.append({"input": inp.strip() + "\nSentiment:", "output": outp.strip()})
-                else:
-                    raise ValueError(f"[ERROR] unknown demon string format: {e}")
-            else:
-                raise ValueError(f"[ERROR] invalid demon type: {type(e)}")
-        return out
     
-    def clean_input(text):
-        if ":" in text:
-            text = text.split(":", 1)[1]
-        if "\n" in text:
-            text = text.split("\n", 1)[0]
-        return text.strip()
+    def clean_input(raw_list):
+        out = []
+        for e in raw_list:
+            # dict 형태
+            if isinstance(e, dict):
+                inp = e.get("input", "").strip()
+                outp = e.get("output", "").strip()
+
+            # 문자열 형태
+            elif isinstance(e, str):
+                parts = e.split("\n")
+                inp = parts[0].strip()
+                outp = parts[1].strip() if len(parts) > 1 else ""
+            else:
+                continue
+
+            # prefix 제거 (":" 기준 1번만 split)
+            if ":" in inp:
+                inp = inp.split(":", 1)[1].strip()
+
+            out.append({"input": inp, "output": outp})
+        return out
+
 
     _, valid_split_demon = val_dataset.gen_few_shot_demonstration(
         tokenizer=tokenizer,
@@ -552,7 +555,7 @@ def convert_to_svdataset(split_demon, train_dataset, demon_indices, val_dataset,
         index_info=None,
         sv_data=True
     )
-    valid_split_demon = norm(valid_split_demon)
+    valid_split_demon = clean_input(valid_split_demon)
 
     _, test_split_demon = test_dataset.gen_few_shot_demonstration(
         tokenizer=tokenizer,
@@ -565,7 +568,7 @@ def convert_to_svdataset(split_demon, train_dataset, demon_indices, val_dataset,
         index_info=None,
         sv_data=True
     )
-    test_split_demon = norm(test_split_demon)[:-1]
+    test_split_demon = clean_input(test_split_demon)[:-1]
     
     all_idx = list(range(len(train_dataset.all_data)))
     candidate_idx = [i for i in all_idx if i not in demon_indices]
@@ -582,31 +585,8 @@ def convert_to_svdataset(split_demon, train_dataset, demon_indices, val_dataset,
             "input": input_str,
             "output": ans_str[label]
         })
-
-    # -------------------------
-    # 3) TRAIN DUMMY demon (10개 생성)
-    # demon_indices 제외한 index 중 랜덤 선택
-    # -------------------------
-    all_idx = list(range(len(train_dataset.all_data)))
-    candidate_idx = [i for i in all_idx if i not in demon_indices]
-
-    if len(candidate_idx) < 10:
-        raise ValueError("Not enough candidates to sample train_dummy_split_demon")
-
-    dummy_idx = random.sample(candidate_idx, 10)
-
-    train_dummy_split_demon = []
-    for idx in dummy_idx:
-        input_str, ans_str, label = train_dataset.apply_template(train_dataset.all_data[idx])
-        train_dummy_split_demon.append({
-            "input": input_str,
-            "output": ans_str[label]
-        })
         
-    split_demon = norm(split_demon)
+    split_demon = clean_input(split_demon)
     split_demon = split_demon[:-1]
-    for data in [split_demon, valid_split_demon, test_split_demon, train_dummy_split_demon]:
-        for d in data:
-            d["input"] = clean_input(d["input"])
 
     return split_demon, train_dummy_split_demon, valid_split_demon, test_split_demon

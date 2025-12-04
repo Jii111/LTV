@@ -487,6 +487,8 @@ def main(args):
         print("test dataset len 비교")
         print(len(test_dataset))
         print(len(test_data)) 
+        print(dummy_test)
+        print(valid_data)
 
         iv_result = {}
 
@@ -664,7 +666,7 @@ def main(args):
                 json.dump(kl_dict, f, indent=4)
 '''
 
-    del mean_activations, base_wrapper, m2_wrapper, m2_adaptive_wrapper, model, tokenizer
+    del base_wrapper, m2_wrapper, m2_adaptive_wrapper, model, tokenizer
     del train_dataset, val_dataset, test_dataset
     gc.collect()
     torch.cuda.empty_cache()
