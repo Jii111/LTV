@@ -481,7 +481,7 @@ def main(args):
         print("Evaluating State Vector baseline...")
         sv_start = time.time()
             
-        svevaluator = ICLVectorEvaluator(metric, Evaluator(args.model_name, devices=None)) 
+        svevaluator = ICLVectorEvaluator(metric, Evaluator(model_path = args.model_name, model=model, tokenizer=tokenizer, devices="0")) 
         dev_data, dummy_test, valid_data, test_data = utils.convert_to_svdataset(split_demon, train_dataset, demon_indices, val_dataset, test_dataset, tokenizer, run_id, args)
         dummy_test = dummy_test[0] # TODO: 1 train query setting check
         print("test dataset len 비교")

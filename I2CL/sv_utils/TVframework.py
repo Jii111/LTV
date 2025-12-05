@@ -16,18 +16,38 @@ import numpy as np
 class Evaluator:
     def __init__(self, model_path, lora_weight=None, devices=None, half=False, load_float16=False, load_bfloat16=False, load_int8=False, model_max_length=None):
         torch.set_grad_enabled(False)
-        self.model, self.tokenizer, self.num2attn, self.num2layer = self.load(
-            model_path=model_path,
-            lora_weight=lora_weight,
-            devices=devices,
-            half=half,
-            load_float16=load_float16,
-            load_bfloat16=load_bfloat16,
-            load_int8=load_int8,
-            model_max_length=model_max_length
-        )
+        
+        if model is not None and tokenizer is not None:
+            self.model = model.eval()
+            self.tokenizer = tokenizer
+            
+            # llm type inference (llama/gptj)
+            if 'llama' in model.name_or_path.lower():
+                num2attn = lambda x: f'model.layers.{x}.self_attn.o_proj'
+                num2layer = lambda x: f'model.layers.{x}'
+            elif 'gptj' in model.name_or_path.lower():
+                num2attn = lambda x: f'transformer.h.{x}.attn.out_proj'
+                num2layer = lambda x: f'transformer.h.{x}'
+            else:
+                raise NotImplementedError
+
+            self.num2attn = num2attn
+            self.num2layer = num2layer
+        else:
+            self.model, self.tokenizer, self.num2attn, self.num2layer = self.load(
+                model_path=model_path,
+                lora_weight=lora_weight,
+                devices=devices,
+                half=half,
+                load_float16=load_float16,
+                load_bfloat16=load_bfloat16,
+                load_int8=load_int8,
+                model_max_length=model_max_length
+            )
 
         self.forward_model_dict = {}
+        
+        
         for layer in range(self.model.config.num_hidden_layers):
             for name, module in self.model.named_modules():
                 if name == self.num2attn(layer):
