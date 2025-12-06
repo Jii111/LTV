@@ -56,6 +56,7 @@ class ICLVectorEvaluator():
             task_vector_list.append(task_vector)
         return self.avg_tv(task_vector_list)
 
+    @torch.no_grad() 
     def single_atv_test(
         self, dummy_queries, dev_data, test_data, class_texts,
         layer_indices, optimizer_config=None, fs_eval=False,  shuffle_labels=False,
@@ -133,6 +134,7 @@ class ICLVectorEvaluator():
                 # LM logits 얻기
                 logits = self.evaluator.write_activation(
                     query, task_vector, demon, intervention_mode, add_to, format_dict)
+                logits = logits.detach().cpu()
 
                 answer_ids = self.evaluator.get_answer_id(
                     query=query, answer=d['output'], proj_tokens=format_dict.get("proj_tokens"))
@@ -213,10 +215,6 @@ class ICLVectorEvaluator():
         print(metrics)
         print("acc :")
         print(topk)
-        
-        print("num optimizers:", len(optimizers))
-        print("expected labels:", len(test_data) * len(optimizers))
-        print("actual labels:", len(all_labels))
 
         return metrics, all_pred_logits, all_labels, topk
 

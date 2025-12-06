@@ -495,9 +495,9 @@ def compute_kl_divergence(logits_p, logits_q, is_qwen=False):
     kl = (probs_p * (probs_p.log() - probs_q.log())).sum(dim=-1)  # per-sample
     
     if is_qwen == True:
-        return kl.float().mean().item(), kl.float().cpu().numpy() # 수정 qwen
+        return kl.float().mean().item()
     else:
-        return kl.mean().item(), kl.cpu().numpy()
+        return kl.mean().item()
 
 def plot_kl_hist(kl_values, mean_kl, save_path):
     """KL divergence histogram plot"""

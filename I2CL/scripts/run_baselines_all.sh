@@ -17,7 +17,7 @@ CONFIG_PATH=${1:-"configs/config_baseline_all.py"}
 mkdir -p "$I2CL_DIR/.log"
 
 TIMESTAMP=$(date +"%Y%m%d_%H%M%S")
-LOG_FILE="$I2CL_DIR/.log/baselines_${TIMESTAMP}.log"
+LOG_FILE="$I2CL_DIR/.log/FV_${TIMESTAMP}.log"
 
 echo "Logging to: $LOG_FILE"
 echo "Project directory: $PROJECT_DIR"
@@ -27,7 +27,7 @@ echo "==========================================" | tee -a "$LOG_FILE"
 echo "Starting baseline pipeline" | tee -a "$LOG_FILE"
 echo "==========================================" | tee -a "$LOG_FILE"
 
-CMD="cd $I2CL_DIR && python run_baselines_all.py --config_path $CONFIG_PATH"
+CMD="cd $I2CL_DIR && python run_baselines_fv.py --config_path $CONFIG_PATH"
 echo "Command: $CMD" | tee -a "$LOG_FILE"
 echo "==========================================" | tee -a "$LOG_FILE"
 

@@ -12,7 +12,7 @@ export HF_DATASETS_CACHE="$PROJECT_DIR/.cache"
 export HF_HOME="$PROJECT_DIR/.cache"
 export LOG_DIR="$I2CL_DIR/.log"
 
-CONFIG_PATH=${1:-"configs/config_baseline_all2.py"}
+CONFIG_PATH=${1:-"configs/config_baseline_all5.py"}
 
 mkdir -p "$I2CL_DIR/.log"
 

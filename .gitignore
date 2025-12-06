@@ -17,6 +17,8 @@ I2CL/plot2_corr.py
 I2CL/plot3_corr.py
 I2CL/plot4_corr.py
 I2CL/plot1_exp.py
+corr_plot_individual.py
+wrap_exp_result.py
 *.png
 *.txt
 *.svg
@@ -35,6 +37,14 @@ __pycache__/
 checkpoints
 
 wandb
+
+# 실험용 파일
+I2CL/configs/config_baseline_all2.py
+I2CL/configs/config_baseline_all5.py
+I2CL/scripts/run_baselines_all_extra2.sh
+I2CL/scripts/run_baselines_all_extra3.sh
+I2CL/scripts/run_baselines_all_extra4.sh
+I2CL/run_baselines_fv.py
 
 # 안쓰는 파일
 not_use

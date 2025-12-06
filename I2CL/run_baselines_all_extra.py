@@ -86,7 +86,7 @@ def get_acc(entry):
 
     return -1
 
-
+@torch.no_grad() 
 def main(args):
     utils.set_seed(args.config['seed'])
     args.device = utils.set_device(args.gpu)
@@ -125,8 +125,8 @@ def main(args):
     base_wrapper = utils.get_model_wrapper(
         args.model_name, model, tokenizer, model_config, args.device
     )
-    m2_wrapper = M2Wrapper(model, tokenizer, model_config, args.device)
-    m2_adaptive_wrapper = M2AdaptiveWrapper(model, tokenizer, model_config, args.device)
+    #m2_wrapper = M2Wrapper(model, tokenizer, model_config, args.device)
+    #m2_adaptive_wrapper = M2AdaptiveWrapper(model, tokenizer, model_config, args.device)
     
     args.val_max_token = val_dataset.get_max_demonstration_token_length(tokenizer)
     args.test_max_token = test_dataset.get_max_demonstration_token_length(tokenizer)
@@ -158,7 +158,6 @@ def main(args):
 
         utils.set_seed(args.config['seed'] + run_id)
         # shared train queries cache per num_queries
-        m2_test_dict = {}; m2a_test_dict = {}
 
         demon, split_demon, demon_indices = train_dataset.gen_few_shot_demonstration(
             tokenizer=tokenizer,
@@ -193,10 +192,10 @@ def main(args):
         test_few_logits = test_few_labels = None
         if args.config['run_baseline']:
             print("Evaluating few-shot baseline...")
-            test_few, test_few_logits, test_few_labels = test_evaluator.evaluate(
+            test_few, test_few_logits, _ = test_evaluator.evaluate(
                 base_wrapper, tokenizer, demonstration=baseline_demon,
                 use_cache=args.config['use_cache'],
-                return_logits=True,
+                return_logits=args.config['return_logits'],
                 logits_mode=args.config['logits_mode']
             )
             result_dict['test_result']['few_shot'].append(test_few)
@@ -253,15 +252,14 @@ def main(args):
         result_dict['time']['i2cl_default'].append(i2cl_end - i2cl_start)
         print(f"Test I2CL_default: {test_i2cl}\n")
 
-        if args.config.get('compute_kl_divergence', False) and test_few_logits is not None:
+        if args.config.get('return_logits', False) and test_few_logits is not None:
             assert test_few_labels == test_i2cl_labels, "Label mismatch between few-shot and I2CL results!"
-            mean_kl_i2cl, kl_values_i2cl = utils.compute_kl_divergence(
+            mean_kl_i2cl = utils.compute_kl_divergence(
                 test_few_logits, test_i2cl_logits, is_qwen='Qwen' in args.model_name
             )
             print(f"KL divergence (Few-shot vs I2CL_default): {mean_kl_i2cl:.4f}")
             kl_dict['i2cl_default'][args.run_name] = {
-                "mean_kl": mean_kl_i2cl,
-                "kl_values": kl_values_i2cl.tolist()
+                "mean_kl": mean_kl_i2cl
             }
 
         # 5. save context vector dict
@@ -322,15 +320,14 @@ def main(args):
         result_dict['time']['i2cl_train'].append(i2cl_end - i2cl_start)
         print(f"Test I2CL_train: {test_i2cl}\n")
 
-        if args.config.get('compute_kl_divergence', False) and test_few_logits is not None:
+        if args.config.get('return_logits', False) and test_few_logits is not None:
             assert test_few_labels == test_i2cl_labels, "Label mismatch between few-shot and I2CL results!"
-            mean_kl_i2cl, kl_values_i2cl = utils.compute_kl_divergence(
+            mean_kl_i2cl = utils.compute_kl_divergence(
                 test_few_logits, test_i2cl_logits, is_qwen='Qwen' in args.model_name
             )
             print(f"KL divergence (Few-shot vs I2CL_train): {mean_kl_i2cl:.4f}")
             kl_dict['i2cl_train'][args.run_name] = {
-                "mean_kl": mean_kl_i2cl,
-                "kl_values": kl_values_i2cl.tolist()
+                "mean_kl": mean_kl_i2cl
             }
 
         ################## ICL task vector baseline ##################
@@ -356,7 +353,7 @@ def main(args):
             test_m1, test_m1_logits, test_m1_labels = test_evaluator.evaluate(
                 base_wrapper, tokenizer, demonstration='',
                 use_cache=args.config['use_cache'],
-                return_logits=True,
+                return_logits=args.config['return_logits'],
                 logits_mode=args.config['logits_mode']
             )
         m1_end = time.time()
@@ -364,15 +361,14 @@ def main(args):
         result_dict['time']['ICLTV'].append(m1_end - m1_start)
         print(f"Test ICL TV: {test_m1}\n")
 
-        if args.config.get('compute_kl_divergence', False) and test_few_logits is not None:
+        if args.config.get('return_logits', False) and test_few_logits is not None:
             assert test_few_labels == test_m1_labels, "Label mismatch between few-shot and ICL TV results!"
-            mean_kl_m1, kl_values_m1 = utils.compute_kl_divergence(
+            mean_kl_m1 = utils.compute_kl_divergence(
                 test_few_logits, test_m1_logits, is_qwen='Qwen' in args.model_name
             )
             print(f"KL divergence (Few-shot vs ICL TV): {mean_kl_m1:.4f}")
             kl_dict['ICLTV'][args.run_name] = {
-                "mean_kl": mean_kl_m1,
-                "kl_values": kl_values_m1.tolist()
+                "mean_kl": mean_kl_m1
             }
 
         ################## FV baseline ##################
@@ -442,7 +438,7 @@ def main(args):
                 dataset=dataset_fv, task_name=args.dataset_name, fv_vector=fv, edit_layer=eval_edit_layer,
                 n_shots=0, prefixes=args.prefixes, separators=args.separators, test_type='test',
                 model=model, model_config=model_config_fv, tokenizer=tokenizer, filter_set=filter_set,
-                return_logits=True
+                return_logits=args.config['return_logits']
                 )
             fv_results_file_suffix = f'_fv_layer_{eval_edit_layer}_sweep.json'
         else:
@@ -466,22 +462,22 @@ def main(args):
         result_dict['time']['fv'].append(fv_end - fv_start)
         print(f"Test FV: {test_fv}\n")
 
-        if args.config.get('compute_kl_divergence', False) and test_few_logits is not None:
+        if args.config.get('return_logits', False) and test_few_logits is not None:
             assert test_few_labels == test_fv_labels, "Label mismatch between few-shot and FV results!"
-            mean_kl_fv, kl_values_fv = utils.compute_kl_divergence(
+            mean_kl_fv = utils.compute_kl_divergence(
                 test_few_logits, test_fv_logits, is_qwen='Qwen' in args.model_name
             )
             print(f"KL divergence (Few-shot vs FV): {mean_kl_fv:.4f}")
             kl_dict['fv'][args.run_name] = {
-                "mean_kl": mean_kl_fv,
-                "kl_values": kl_values_fv.tolist()
+                "mean_kl": mean_kl_fv
             }
         '''
         
         print("Evaluating State Vector baseline...")
         sv_start = time.time()
             
-        svevaluator = ICLVectorEvaluator(metric, Evaluator(model_path = args.model_name, model=model, tokenizer=tokenizer, devices="0")) 
+        _evaluator = Evaluator(model_path = args.model_name, model=model, tokenizer=tokenizer, devices="0")
+        svevaluator = ICLVectorEvaluator(metric, _evaluator)  
         dev_data, dummy_test, valid_data, test_data = utils.convert_to_svdataset(split_demon, train_dataset, demon_indices, val_dataset, test_dataset, tokenizer, run_id, args)
         dummy_test = dummy_test[0] # TODO: 1 train query setting check
         print("test dataset len 비교")
@@ -521,7 +517,7 @@ def main(args):
                                                 add_to='atten',
                                                 question_prompt=args.config['question_prompt'],
                                                 format_dict=args.format_dict,
-                                                return_logits=True)
+                                                return_logits=args.config['return_logits'])
         for k, v in acc.items():
             iv_result[run_name + '_' + k] = v[0]
             print(run_name + '_' + k, v[0])
@@ -531,15 +527,14 @@ def main(args):
         result_dict['time']['state vector'].append(sv_end - sv_start)
         print(f"Test State Vector: {test_sv}\n")
 
-        if args.config.get('compute_kl_divergence', False) and test_few_logits is not None:
+        if args.config.get('return_logits', False) and test_few_logits is not None:
             assert test_few_labels == test_sv_labels, "Label mismatch between few-shot and FV results!"
-            mean_kl_sv, kl_values_sv = utils.compute_kl_divergence(
+            mean_kl_sv = utils.compute_kl_divergence(
                 test_few_logits, test_sv_logits, is_qwen='Qwen' in args.model_name
             )
             print(f"KL divergence (Few-shot vs FV): {mean_kl_sv:.4f}")
             kl_dict['state vector'][args.run_name] = {
-                    "mean_kl": mean_kl_sv,
-                    "kl_values": kl_values_sv.tolist()
+                    "mean_kl": mean_kl_sv
                 }
         
         with open(os.path.join(args.save_dir, 'result_dict.json'), 'w') as f:
@@ -548,7 +543,7 @@ def main(args):
             with open(os.path.join(args.save_dir, 'kl_divergence.json'), 'w') as f:
                 json.dump(kl_dict, f, indent=4)
                 
-        del svevaluator, mean_kl_sv, kl_values_sv, test_sv_logits
+        del svevaluator, mean_kl_sv, test_sv_logits, _evaluator
         gc.collect()
         torch.cuda.empty_cache()
         '''
@@ -580,7 +575,7 @@ def main(args):
                 test_m2, test_m2_logits, test_m2_labels = test_evaluator.evaluate(
                     m2_wrapper, tokenizer, demonstration='',
                     use_cache=args.config['use_cache'],
-                    return_logits=True,
+                    return_logits=args.config['return_logits'],
                     logits_mode=args.config['logits_mode']
                 )
             m2_end = time.time()
@@ -588,8 +583,8 @@ def main(args):
             print(f"Test M2({q_key}): {test_m2}\n")
             result_dict['time']['m2'].append(m2_end - m2_start)
 
-            if args.config.get('compute_kl_divergence', False) and test_few_logits is not None:
-                mean_kl, kl_values = utils.compute_kl_divergence(
+            if args.config.get('return_logits', False) and test_few_logits is not None:
+                mean_kl = utils.compute_kl_divergence(
                     test_few_logits, test_m2_logits, is_qwen='Qwen' in args.model_name
                 )
                 print(f"KL divergence (Few-shot vs M2): {mean_kl:.4f}")
@@ -600,7 +595,6 @@ def main(args):
                 utils.nested_set(kl_dict,
                         ['m2', args.run_name, q_key],
                         {"mean_kl": mean_kl,
-                        "kl_values": kl_values.tolist(),
                         "labels": list(map(int, test_m2_labels))})
                 utils.plot_kl_hist(
                     kl_values, mean_kl,
@@ -628,7 +622,7 @@ def main(args):
                     test_m2a, test_m2a_logits, test_m2a_labels = test_evaluator.evaluate(
                         m2_adaptive_wrapper, tokenizer, demonstration='',
                         use_cache=args.config['use_cache'],
-                        return_logits=True,
+                        return_logits=args.config['return_logits'],
                         logits_mode=args.config['logits_mode']
                     )
                 m2a_end = time.time()
@@ -636,8 +630,8 @@ def main(args):
                 result_dict['time']['m2_adaptive'].append(m2a_end - m2a_start)
                 print(f"Test M2-Adaptive: {test_m2a}\n")
 
-                if args.config.get('compute_kl_divergence', False) and test_few_logits is not None:
-                    mean_kl_a, kl_values_a = utils.compute_kl_divergence(
+                if args.config.get('return_logits', False) and test_few_logits is not None:
+                    mean_kl_a = utils.compute_kl_divergence(
                         test_few_logits, test_m2a_logits, is_qwen='Qwen' in args.model_name
                     )
                     print(f"KL divergence (Few-shot vs M2-Adaptive): {mean_kl_a:.4f}")
@@ -648,7 +642,6 @@ def main(args):
                     utils.nested_set(kl_dict,
                         ['m2_adaptive', args.run_name, q_key, lam_key],
                         {"mean_kl": mean_kl_a,
-                        "kl_values": kl_values_a.tolist(),
                         "labels": list(map(int, test_m2a_labels))})
 
                     utils.plot_kl_hist(
@@ -665,8 +658,8 @@ def main(args):
             with open(os.path.join(args.save_dir, 'kl_divergence.json'), 'w') as f:
                 json.dump(kl_dict, f, indent=4)
 '''
-
-    del base_wrapper, m2_wrapper, m2_adaptive_wrapper, model, tokenizer
+    #del m2_wrapper, m2_adaptive_wrapper
+    del base_wrapper, model, tokenizer
     del train_dataset, val_dataset, test_dataset
     gc.collect()
     torch.cuda.empty_cache()

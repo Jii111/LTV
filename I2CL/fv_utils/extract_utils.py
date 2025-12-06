@@ -43,6 +43,7 @@ def gather_attn_activations(prompt_data, layers, dummy_labels, model, tokenizer,
 
     return td, idx_map, idx_avg
 
+@torch.no_grad()
 def get_mean_head_activations(dataset, model, model_config, tokenizer, n_icl_examples = 10, N_TRIALS = 100, shuffle_labels=False, prefixes=None, separators=None, filter_set=None):
     """
     Computes the average activations for each attention head in the model, where multi-token phrases are condensed into a single slot through averaging.
@@ -102,7 +103,11 @@ def get_mean_head_activations(dataset, model, model_config, tokenizer, n_icl_exa
         for (i,j) in idx_avg.values():
             stack_filtered[:,:,idx_map[i]] = stack_initial[:,:,i:j+1].mean(axis=2) # Average activations of multi-token words across all its tokens
         
+        stack_filtered = stack_filtered.cpu()
         activation_storage[n] = stack_filtered
+        
+        del stack_filtered, stack_initial
+        torch.cuda.empty_cache()
 
     mean_activations = activation_storage.mean(dim=0)
     return mean_activations

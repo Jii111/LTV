@@ -104,6 +104,43 @@ def replace_activation_w_avg(layer_head_token_pairs, avg_activations, model, mod
 
 def add_function_vector(edit_layer, fv_vector, device, idx=-1):
     """
+    Interventions with debug logs.
+    """
+    fv_vector = fv_vector.to(device)
+
+    def add_act(output, layer_name):
+
+        try:
+            current_layer = int(layer_name.split(".")[2])
+        except:
+            print("[FV DEBUG] layer_name parse failed:", layer_name)
+            return output
+
+        if current_layer != edit_layer:
+            return output
+        
+        if isinstance(output, tuple):
+            hidden = output[0]
+        else:
+            hidden = output
+
+        # --- Index valid check ---
+        if idx < -hidden.shape[1] or idx >= hidden.shape[1]:
+            print(f"[FV DEBUG] WARNING: idx {idx} out of bounds for seq_len {hidden.shape[1]}")
+            return output
+
+        hidden[:, idx] += fv_vector
+
+        # Return updated output
+        if isinstance(output, tuple):
+            return (hidden,) + output[1:]
+        else:
+            return hidden
+
+    return add_act
+
+def add_function_vector_org(edit_layer, fv_vector, device, idx=-1):
+    """
     Adds a vector to the output of a specified layer in the model
 
     Parameters:
@@ -115,6 +152,7 @@ def add_function_vector(edit_layer, fv_vector, device, idx=-1):
     Returns:
     add_act: a fuction specifying how to add a function vector to a layer's output hidden state
     """
+    
     def add_act(output, layer_name):
         current_layer = int(layer_name.split(".")[2])
         if current_layer == edit_layer:
@@ -165,7 +203,7 @@ def function_vector_intervention(sentence, target, edit_layer, function_vector, 
         intervention_idx = -1 - target_len
     elif generate_str:
         MAX_NEW_TOKENS = 16
-        output = model.generate(inputs그.input_ids, top_p=0.9, temperature=0.1,
+        output = model.generate(inputs.input_ids, top_p=0.9, temperature=0.1,
                                 max_new_tokens=MAX_NEW_TOKENS)
         clean_output = tokenizer.decode(output.squeeze()[-MAX_NEW_TOKENS:])
         intervention_idx = -1
@@ -173,9 +211,10 @@ def function_vector_intervention(sentence, target, edit_layer, function_vector, 
         clean_output = model(**inputs).logits[:,-1,:]
         intervention_idx = -1
 
+
     # Perform Intervention
     intervention_fn = add_function_vector(edit_layer, function_vector.reshape(1, model_config['resid_dim']), model.device, idx=intervention_idx)
-    with TraceDict(model, layers=model_config['layer_hook_names'], edit_output=intervention_fn):     
+    with TraceDict(model, layers=model_config['layer_hook_names'], edit_output=intervention_fn) as td:     
         if compute_nll:
             output = model(**nll_inputs, labels=nll_targets)
             intervention_nll = output.loss.item()
@@ -186,6 +225,10 @@ def function_vector_intervention(sentence, target, edit_layer, function_vector, 
             intervention_output = tokenizer.decode(output.squeeze()[-MAX_NEW_TOKENS:])
         else:
             intervention_output = model(**inputs).logits[:,-1,:] # batch_size x n_tokens x vocab_size, only want last token prediction
+    
+    diff = (intervention_output - clean_output).abs().max()
+    print(">> FV effect (logit max diff):", diff.item())
+    print(">> hook calls:", len(td))
     
     fvi_output = (clean_output, intervention_output)
     if compute_nll:

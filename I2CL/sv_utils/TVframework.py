@@ -14,7 +14,7 @@ from baukit import TraceDict
 import numpy as np
 
 class Evaluator:
-    def __init__(self, model_path, lora_weight=None, devices=None, half=False, load_float16=False, load_bfloat16=False, load_int8=False, model_max_length=None):
+    def __init__(self, model_path, model = None, tokenizer = None, lora_weight=None, devices=None, half=False, load_float16=False, load_bfloat16=False, load_int8=False, model_max_length=None):
         torch.set_grad_enabled(False)
         
         if model is not None and tokenizer is not None:

@@ -214,6 +214,9 @@ class Evaluator(nn.Module):
                 if return_logits:
                     all_pred_logits.append(scores.detach().cpu())
                 all_pred_labels.extend(pred_labels.cpu().numpy().tolist())
+                
+                del logits, pred_logits, scores, output
+                torch.cuda.empty_cache()
 
         assert len(all_pred_labels) == len(all_labels)
         # both all_results and all_labels are list containing label index, can you help me to calculate accuracy and macro f1?

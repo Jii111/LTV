@@ -208,7 +208,7 @@ def sentence_eval(sentence, target, model, tokenizer, compute_nll=True, generate
     else:
         return clean_output 
 
-
+@torch.no_grad()
 def n_shot_eval(dataset, task_name, fv_vector, edit_layer: int, n_shots: int, model, model_config, tokenizer, shuffle_labels:bool=False,
                 filter_set=None, prefixes=None, separators=None, generate_str=False, pred_filepath=None,
                 test_type=None, metric="f1_score", return_logits=False):
@@ -331,7 +331,7 @@ def n_shot_eval(dataset, task_name, fv_vector, edit_layer: int, n_shots: int, mo
             intervention_rank = compute_individual_token_rank(intervention_output, target_token_id)
             
             clean_rank_list.append(clean_rank)
-            intervention_rank_list.append(intervention_rank)
+            intervention_rank_list.append(intervention_rank)        
         
         if return_logits == True:
             pred_label, true_label, logit = eval_i2clst(task_name, sentence, ans_txt_list = ans_txt_list, interest_index = interest_index, target = [target], model=model, tokenizer=tokenizer, fv_result = intervention_output)
@@ -351,6 +351,8 @@ def n_shot_eval(dataset, task_name, fv_vector, edit_layer: int, n_shots: int, mo
     
     if pred_filepath:
         pred_file.close()
+    print("pred label :")
+    print("  ",all_preds)
 
     if return_logits == True:
         if len(all_preds) > 0:
@@ -396,7 +398,7 @@ def n_shot_eval(dataset, task_name, fv_vector, edit_layer: int, n_shots: int, mo
 
 
 # Evaluate few-shot dataset w/o intervention
-# 수정
+@torch.no_grad()
 def n_shot_eval_no_intervention(dataset, task_name, n_shots, model, model_config, tokenizer, compute_ppl=True, generate_str=False,
                                 shuffle_labels=False, prefixes=None, separators=None, pred_filepath=None,
                                 metric="f1_score", test_split='test', return_logits=False):
