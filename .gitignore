@@ -40,10 +40,19 @@ wandb
 
 # 실험용 파일
 I2CL/configs/config_baseline_all2.py
+I2CL/configs/config_baseline_all3.py
+I2CL/configs/config_baseline_all4.py
 I2CL/configs/config_baseline_all5.py
+I2CL/configs/config_baseline_all6.py
+I2CL/configs/config_baseline_task_vector2.py
 I2CL/scripts/run_baselines_all_extra2.sh
 I2CL/scripts/run_baselines_all_extra3.sh
 I2CL/scripts/run_baselines_all_extra4.sh
+I2CL/scripts/run_baselines_all_extra5.sh
+I2CL/scripts/run_baselines_all_extra6.sh
+I2CL/scripts/run_baselines_all2.sh
+I2CL/run_baselines_all_extra_corr.py
+I2CL/run_baselines_fv_corr.py
 I2CL/run_baselines_fv.py
 
 # 안쓰는 파일

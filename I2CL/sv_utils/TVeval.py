@@ -97,7 +97,7 @@ class ICLVectorEvaluator():
         if return_logits:
             class_token_ids = []
             for txt in class_texts:
-                if 'gpt' in self.tokenizer.__class__.__name__.lower():
+                if 'qwen' in self.tokenizer.__class__.__name__.lower():
                     txt = ' ' + txt
                 ids = self.tokenizer.encode(txt, add_special_tokens=False)
                 class_token_ids.append(ids[0])
@@ -155,12 +155,16 @@ class ICLVectorEvaluator():
 
                     all_pred_logits.append(probs.detach().cpu())
                     token_str = self.tokenizer.decode(answer_ids[0]).strip()
+                    print(class_token_ids)
+                    print(answer_ids[0])
+                    print(answer_ids)
                     if answer_ids[0] in class_token_ids:
                         label = class_token_ids.index(answer_ids[0])
+                        all_labels.append(label)
                     else:
                         print("Not matching Label idx")
 
-                    all_labels.append(label)
+                    
 
             # 기존 top-k metric도 유지
             topk[opt.name], test_order[opt.name] = top_k_metric(self.config['top_k'], logit_list, answer_ids_list)

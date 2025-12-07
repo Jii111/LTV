@@ -1,10 +1,10 @@
 config = {}
 
 ### Main Configuration ###
-config['exp_name'] = 'exps/baseline_fv_mainexp'  # M2 experiment directory
+config['exp_name'] = 'exps/baseline_fv_mainexp2'  # M2 experiment directory
 config['gpus'] = ['0']
 config['models'] = ['meta-llama/Llama-3.1-8B','Qwen/Qwen2.5-7B']
-config['datasets'] = ['mr','trec','sst5'] 
+config['datasets'] = ['hate_speech18','dbpedia'] 
 config['shot_per_class'] = 30 # number of shots (NOT per class)
 config['bs'] = 2  # batch size
 

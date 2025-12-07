@@ -16,19 +16,19 @@ class Evaluator(nn.Module):
 
     def evaluate(self, model_wrapper, tokenizer, demonstration='', use_cache=False,
                  return_logits=False, logits_mode='first', return_head_outputs=False,
-                 return_q_states=False):  # ✅ 수정
+                 return_q_states=False): 
 
         return self._evaluate_text_classification_batch(
             model_wrapper, tokenizer,
             demonstration, use_cache=use_cache, return_logits=return_logits,
             logits_mode=logits_mode, return_head_outputs=return_head_outputs,
             return_q_states=return_q_states
-        )  # ✅ 수정
+        )  
 
     def _evaluate_text_classification_batch(self, model_wrapper, tokenizer,
                                             demonstration, use_cache=False, return_logits=False,
                                             logits_mode='first', return_head_outputs=False,
-                                            return_q_states=False):  # ✅ 수정
+                                            return_q_states=False): 
 
         model = model_wrapper.model
         # prepare label dict          
@@ -52,7 +52,7 @@ class Evaluator(nn.Module):
 
         # prepare all data
         all_pred_labels = []
-        all_pred_logits = [] if return_logits else None  # ✅ 수정
+        all_pred_logits = [] if return_logits else None 
         all_inputs, all_labels = [], []
         for data in self.dataset.all_data:
             ques_str, _, label = self.dataset.apply_template(data)
@@ -200,7 +200,7 @@ class Evaluator(nn.Module):
                     interest_index = list(label_map.keys())
                     pred_logits = pred_logits[:, interest_index]  # (B,K)
 
-                    scores = F.softmax(pred_logits, dim=-1)  # 굳이 안해도 된다는데 체크
+                    scores = F.softmax(pred_logits, dim=-1) 
                     pred_labels = scores.argmax(dim=-1)
 
                     # decode pred_labels to text

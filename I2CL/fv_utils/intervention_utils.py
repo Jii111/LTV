@@ -228,7 +228,6 @@ def function_vector_intervention(sentence, target, edit_layer, function_vector, 
     
     diff = (intervention_output - clean_output).abs().max()
     print(">> FV effect (logit max diff):", diff.item())
-    print(">> hook calls:", len(td))
     
     fvi_output = (clean_output, intervention_output)
     if compute_nll:

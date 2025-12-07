@@ -192,7 +192,7 @@ def main(args):
         test_few_logits = test_few_labels = None
         if args.config['run_baseline']:
             print("Evaluating few-shot baseline...")
-            test_few, test_few_logits, _ = test_evaluator.evaluate(
+            test_few, test_few_logits, test_few_labels = test_evaluator.evaluate(
                 base_wrapper, tokenizer, demonstration=baseline_demon,
                 use_cache=args.config['use_cache'],
                 return_logits=args.config['return_logits'],

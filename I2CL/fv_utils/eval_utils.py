@@ -351,8 +351,6 @@ def n_shot_eval(dataset, task_name, fv_vector, edit_layer: int, n_shots: int, mo
     
     if pred_filepath:
         pred_file.close()
-    print("pred label :")
-    print("  ",all_preds)
 
     if return_logits == True:
         if len(all_preds) > 0:

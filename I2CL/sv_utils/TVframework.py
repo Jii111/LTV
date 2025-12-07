@@ -20,9 +20,8 @@ class Evaluator:
         if model is not None and tokenizer is not None:
             self.model = model.eval()
             self.tokenizer = tokenizer
-            
-            # llm type inference (llama/gptj)
-            if 'llama' in model.name_or_path.lower():
+
+            if 'llama' in model.name_or_path.lower() or 'qwen' in model.name_or_path.lower():
                 num2attn = lambda x: f'model.layers.{x}.self_attn.o_proj'
                 num2layer = lambda x: f'model.layers.{x}'
             elif 'gptj' in model.name_or_path.lower():
@@ -176,6 +175,10 @@ class Evaluator:
 
     def get_answer_id(self,query, answer, proj_tokens=None):
         if proj_tokens is None: proj_tokens = '→'
+        
+        if 'qwen' in self.tokenizer.__class__.__name__.lower():
+            answer = ' ' + answer
+        
         source = self.tokenizer(query + proj_tokens, truncation=False, padding=False).input_ids
         target = self.tokenizer(query + proj_tokens + answer, truncation=False, padding=False).input_ids
         assert len(source) < len(target) < self.tokenizer.model_max_length
