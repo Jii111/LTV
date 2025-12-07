@@ -185,7 +185,7 @@ class Evaluator:
         return target[len(source): ]
         # return self.tokenizer.convert_tokens_to_ids(self.tokenizer.tokenize(answer))
 
-    def write_and_read_activation(self, input_ids, read_hook_names=None, write_hook_names=None, write_hook_fn=None):
+    def write_and_read_activation(self, input_ids, read_hook_names=None, write_hook_names=None, write_hook_fn=None, retain_input=True):
         if read_hook_names is None:
             read_hook_names = []
         if write_hook_names is None:
@@ -193,9 +193,19 @@ class Evaluator:
             write_hook_fn = None
         hook_names = list(set(read_hook_names) | set(write_hook_names))
         with torch.no_grad():
-            with TraceDict(self.model, layers=hook_names, clone=False, detach=False, retain_input=True, retain_output=False, edit_output=write_hook_fn) as activations_td:
+            with TraceDict(
+                self.model,
+                layers=hook_names,
+                clone=False,
+                detach=False,
+                retain_input=retain_input,
+                retain_output=False,
+                edit_output=write_hook_fn
+            ) as activations_td:
                 logits = self.model(input_ids.to(self.model.device)).logits.cpu()
-        hook_input = {l: activations_td[l].input[0].cpu() for l in read_hook_names} #Layer: (Len, Hidden)
+        hook_input = {}
+        if retain_input:
+            hook_input = {l: activations_td[l].input[0].cpu() for l in read_hook_names} #Layer: (Len, Hidden)
         return hook_input, logits[0,-1]
 
     def write_and_read_hidden(self, input_ids, read_hook_names=None, write_hook_names=None, write_hook_fn=None):
@@ -250,18 +260,34 @@ class Evaluator:
         )
         config = {"intervention_mode": intervention_mode}
         layer_indices = list(task_vector.keys())
+        retain_input = return_mode != 'logits'
         if add_to == 'atten':
             layer_hook_names = [self.num2attn(x) for x in layer_indices]
             task_vector = {self.num2attn(k): v for k, v in task_vector.items()}
             intervention_fn = self.intervention_function(config, layer_hook_names, tv_indices, task_vector, self.model.device, self.forward_model_dict)
-            activation, logits = self.write_and_read_activation(input_ids, layer_hook_names, layer_hook_names, intervention_fn)
-            new_task_vector = {l: self.select_task_vector(input_mask, activation[self.num2attn(l)], len(demon_list)) for l in layer_indices}
+            read_hook_names = [] if return_mode == 'logits' else layer_hook_names
+            activation, logits = self.write_and_read_activation(
+                input_ids,
+                read_hook_names,
+                layer_hook_names,
+                intervention_fn,
+                retain_input=retain_input
+            )
+            if return_mode != 'logits':
+                new_task_vector = {l: self.select_task_vector(input_mask, activation[self.num2attn(l)], len(demon_list)) for l in layer_indices}
         else:
             layer_hook_names = [self.num2layer(x) for x in layer_indices]
             task_vector = {self.num2layer(k): v for k, v in task_vector.items()}
             intervention_fn = self.intervention_function(config, layer_hook_names, tv_indices, task_vector, self.model.device, self.forward_model_dict)
-            activation, logits = self.write_and_read_hidden(input_ids, layer_hook_names, layer_hook_names, intervention_fn)
-            new_task_vector = {l: self.select_task_vector(input_mask, activation[self.num2layer(l)], len(demon_list)) for l in layer_indices}
+            read_hook_names = [] if return_mode == 'logits' else layer_hook_names
+            activation, logits = self.write_and_read_hidden(
+                input_ids,
+                read_hook_names,
+                layer_hook_names,
+                intervention_fn
+            )
+            if return_mode != 'logits':
+                new_task_vector = {l: self.select_task_vector(input_mask, activation[self.num2layer(l)], len(demon_list)) for l in layer_indices}
 
         if return_mode == 'logits':
             return logits
