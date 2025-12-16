@@ -158,23 +158,29 @@ class Evaluator(nn.Module):
                 # set global variables
                 gv.ATTN_MASK_START = torch.zeros_like(pred_loc)
                 gv.ATTN_MASK_END = pred_loc
+                # Build kwargs only with supported keys to avoid TypeError on some models
+                forward_vars = model.forward.__code__.co_varnames
+                extra_kwargs = {}
+                if 'return_head_outputs' in forward_vars:
+                    extra_kwargs['return_head_outputs'] = return_head_outputs
+                if 'return_q_states' in forward_vars:
+                    extra_kwargs['return_q_states'] = return_q_states
+                if 'output_hidden_states' in forward_vars:
+                    extra_kwargs['output_hidden_states'] = return_label_hidden
+
                 if use_cache:
                     attn_mask = torch.cat([demon_attn_mask, attn_mask], dim=1)
                     with torch.no_grad():
                         output = model(
                             input_ids=input_ids, attention_mask=attn_mask,
                             past_key_values=demon_past_key_values, use_cache=use_cache,
-                            return_head_outputs=return_head_outputs,
-                            return_q_states=return_q_states,
-                            output_hidden_states=return_label_hidden
+                            **extra_kwargs
                         )
                 else:
                     with torch.no_grad():
                         output = model(
                             input_ids=input_ids, attention_mask=attn_mask, use_cache=False,
-                            return_head_outputs=return_head_outputs,
-                            return_q_states=return_q_states,
-                            output_hidden_states=return_label_hidden
+                            **extra_kwargs
                         )
                 logits = output.logits
                 hidden_states = output.hidden_states if return_label_hidden else None

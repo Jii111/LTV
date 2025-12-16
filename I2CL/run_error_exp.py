@@ -225,13 +225,16 @@ def run_mlp_training(
 # ---------------------------
 
 def main(args):
+    print(f"[Init] Starting run: model={args.model_name}, dataset={args.dataset_name}")
     utils.set_seed(args.config['seed'])
     args.device = utils.set_device(args.gpu)
     utils.init_exp_path(args, args.config['exp_name'])
 
-    model, tokenizer, model_config = utils.load_model_tokenizer(
+    print("[Load] Loading model/tokenizer...")
+    model, tokenizer, model_config, _ = utils.load_model_tokenizer(
         args.model_name, args.device, output_hidden_states=True
     )
+    print("[Load] Model/tokenizer loaded.")
 
     base_wrapper = utils.get_model_wrapper(
         args.model_name, model, tokenizer, model_config, args.device
@@ -239,6 +242,7 @@ def main(args):
     m2_wrapper = M2Wrapper(model, tokenizer, model_config, args.device)
     m2_adaptive_wrapper = M2AdaptiveWrapper(model, tokenizer, model_config, args.device)
 
+    print("[Data] Loading datasets...")
     train_dataset = md.get_dataset(args.dataset_name, split='train', max_data_num=None,
                                    seed=args.config['seed'])
     val_dataset = md.get_dataset(args.dataset_name, split='validation',
@@ -249,6 +253,7 @@ def main(args):
                                   max_data_num=args.config['test_data_num'],
                                   sample_mode=args.config['sample_method'],
                                   seed=args.config['seed'])
+    print(f"[Data] Sizes -> train: {len(train_dataset.all_data)}, val: {len(val_dataset.all_data)}, test: {len(test_dataset.all_data)}")
 
     args.val_max_token = val_dataset.get_max_demonstration_token_length(tokenizer)
     args.test_max_token = test_dataset.get_max_demonstration_token_length(tokenizer)
@@ -273,9 +278,11 @@ def main(args):
         run_name = f'run_{run_id}'
         args.run_name = run_name
         run_progress.set_description(f"Run {run_id + 1}/{args.config['run_num']}")
+        print(f"\n[Run] ===== {run_name} =====")
         utils.set_seed(args.config['seed'] + run_id)
 
         # Demonstration
+        print("[Demo] Generating few-shot demonstration...")
         demon, _, demon_indices = train_dataset.gen_few_shot_demonstration(
             tokenizer=tokenizer,
             shot_num=args.shot_num,
@@ -294,6 +301,7 @@ def main(args):
         result_dict['demon'][run_name] = demon
 
         # Baseline ICL hidden (test)
+        print("[Eval] Collecting ICL hidden states on test...")
         _, icl_hidden = test_evaluator.evaluate(
             base_wrapper, tokenizer, demonstration=baseline_demon,
             use_cache=args.config['use_cache'],
@@ -302,6 +310,7 @@ def main(args):
         icl_hidden = icl_hidden.to(args.device)
 
         # Zero-shot hidden (needed for MLP inference)
+        print("[Eval] Collecting zero-shot hidden states on test...")
         _, zero_hidden = test_evaluator.evaluate(
             base_wrapper, tokenizer, demonstration='',
             use_cache=args.config['use_cache'],
@@ -314,8 +323,10 @@ def main(args):
         train_queries, _ = build_train_queries(
             train_dataset, args.config['num_train_queries_m2'], exclude_indices=exclude_demo
         )
+        print(f"[Train Queries] Collected {len(train_queries)} anchors (excluded {len(exclude_demo)} demo indices)")
 
         # M2 constant vector (precompute once)
+        print("[M2] Extracting constant task vector...")
         task_vector = m2_wrapper.extract_m2_task_vector(
             demo=baseline_demon,
             train_queries=train_queries,
@@ -325,6 +336,7 @@ def main(args):
         )
 
         # M2 Adaptive (closed-form) precompute once
+        print("[M2 Adaptive] Extracting adaptive task matrix...")
         adaptive_matrix = m2_adaptive_wrapper.extract_adaptive_task_vector(
             demo=baseline_demon,
             train_queries=train_queries,
@@ -335,6 +347,7 @@ def main(args):
         )
 
         # Evaluate M2 corrected hidden
+        print("[Eval] Evaluating M2 on test...")
         with m2_wrapper.inject_m2_task_vector(task_vector):
             _, m2_hidden = test_evaluator.evaluate(
                 m2_wrapper, tokenizer, demonstration='',
@@ -344,6 +357,7 @@ def main(args):
         m2_hidden = m2_hidden.to(args.device)
 
         # Evaluate M2 Adaptive corrected hidden
+        print("[Eval] Evaluating M2 Adaptive on test...")
         with m2_adaptive_wrapper.inject_adaptive_task_vector(adaptive_matrix):
             _, m2a_hidden = test_evaluator.evaluate(
                 m2_adaptive_wrapper, tokenizer, demonstration='',
@@ -357,14 +371,17 @@ def main(args):
             # Collect MLP training data
             mlp_query_num = min(mlp_cfg.get('num_train_queries', len(train_queries)), len(train_queries))
             mlp_queries = train_queries[:mlp_query_num]
+            print(f"[MLP] Collecting train anchors ({mlp_query_num}) for MLP...")
             mlp_features, mlp_targets = collect_zero_and_delta(
                 model, tokenizer, baseline_demon, mlp_queries, args.device, args.config['extraction_batch_size']
             )
             # Eval data for MLP: use test set zero/ICL difference
+            print("[MLP] Preparing eval data from test hidden states...")
             mlp_eval_features = zero_hidden.detach().cpu()
             mlp_eval_targets = (icl_hidden - zero_hidden).detach().cpu()
 
             # Train M2 MLP
+            print("[MLP] Training MLP...")
             mlp_model, mlp_logs = run_mlp_training(
                 mlp_features, mlp_targets,
                 mlp_eval_features, mlp_eval_targets,
@@ -389,6 +406,7 @@ def main(args):
             m2mlp_hidden = zero_hidden.clone()
 
         # Compute MSEs (ICL vs each corrected hidden)
+        print("[MSE] Computing test MSEs...")
         mse_dict = {
             'icl_vs_m2': mse_between(icl_hidden, m2_hidden),
             'icl_vs_m2_adaptive': mse_between(icl_hidden, m2a_hidden),
@@ -423,14 +441,14 @@ def main(args):
                 y=mse_dict['icl_vs_m2'],
                 color=colors.get('m2', '#1f77b4'),
                 linestyle='--',
-                label='Static',
+                label=f"Static (M2): {mse_dict['icl_vs_m2']:.4f}",
             )
             # Task Matrix line (M2 Adaptive)
             plt.axhline(
                 y=mse_dict['icl_vs_m2_adaptive'],
                 color=colors.get('m2_adaptive', '#ff7f0e'),
                 linestyle='-.',
-                label='Task Matrix',
+                label=f"Task Matrix (Adaptive): {mse_dict['icl_vs_m2_adaptive']:.4f}",
             )
             # MLP curve
             plt.errorbar(
@@ -441,7 +459,7 @@ def main(args):
                 color=colors.get('mlp', '#2ca02c'),
                 ecolor=colors.get('mlp', '#2ca02c'),
                 capsize=3,
-                label='MLP',
+                label='MLP (eval on test Δ)',
             )
 
             plt.xlabel('Epoch', fontsize=13)
