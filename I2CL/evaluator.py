@@ -16,19 +16,19 @@ class Evaluator(nn.Module):
 
     def evaluate(self, model_wrapper, tokenizer, demonstration='', use_cache=False,
                  return_logits=False, logits_mode='first', return_head_outputs=False,
-                 return_q_states=False): 
+                 return_q_states=False, return_label_hidden=False): 
 
         return self._evaluate_text_classification_batch(
             model_wrapper, tokenizer,
             demonstration, use_cache=use_cache, return_logits=return_logits,
             logits_mode=logits_mode, return_head_outputs=return_head_outputs,
-            return_q_states=return_q_states
+            return_q_states=return_q_states, return_label_hidden=return_label_hidden
         )  
 
     def _evaluate_text_classification_batch(self, model_wrapper, tokenizer,
                                             demonstration, use_cache=False, return_logits=False,
                                             logits_mode='first', return_head_outputs=False,
-                                            return_q_states=False): 
+                                            return_q_states=False, return_label_hidden=False): 
 
         model = model_wrapper.model
         # prepare label dict          
@@ -94,6 +94,7 @@ class Evaluator(nn.Module):
 
         # loop over all data
         with torch.no_grad():
+            all_label_hiddens = [] if return_label_hidden else None
             batch_iter = tqdm(
                 enumerate(range(0, len(all_inputs), self.batch_size)),
                 total=(len(all_inputs) + self.batch_size - 1) // self.batch_size,
@@ -164,16 +165,19 @@ class Evaluator(nn.Module):
                             input_ids=input_ids, attention_mask=attn_mask,
                             past_key_values=demon_past_key_values, use_cache=use_cache,
                             return_head_outputs=return_head_outputs,
-                            return_q_states=return_q_states
+                            return_q_states=return_q_states,
+                            output_hidden_states=return_label_hidden
                         )
                 else:
                     with torch.no_grad():
                         output = model(
                             input_ids=input_ids, attention_mask=attn_mask, use_cache=False,
                             return_head_outputs=return_head_outputs,
-                            return_q_states=return_q_states
+                            return_q_states=return_q_states,
+                            output_hidden_states=return_label_hidden
                         )
                 logits = output.logits
+                hidden_states = output.hidden_states if return_label_hidden else None
 
                 # DEBUGGING: Print output shape for first batch only
                 if batch_idx == 0:
@@ -210,6 +214,11 @@ class Evaluator(nn.Module):
 
                 else:
                     raise ValueError(f"Unknown logits_mode: {logits_mode}")
+
+                if return_label_hidden and hidden_states is not None:
+                    # Store last-layer hidden states at label positions only (consistent with TV methods)
+                    label_hidden = hidden_states[-1][torch.arange(hidden_states[-1].size(0)), pred_loc]
+                    all_label_hiddens.append(label_hidden.detach().cpu())
 
                 if return_logits:
                     all_pred_logits.append(scores.detach().cpu())
@@ -248,8 +257,15 @@ class Evaluator(nn.Module):
         acc = sum(acc) / len(acc)
         metrics = {'acc': acc, 'macro_f1': macro_f1}
 
-        if return_logits:  # ✅ 수정
+        if return_logits:
             all_pred_logits = torch.cat(all_pred_logits, dim=0)  # (N, num_classes)
+            if return_label_hidden and all_label_hiddens:
+                label_hiddens = torch.cat(all_label_hiddens, dim=0)
+                return metrics, all_pred_logits, all_labels, label_hiddens
             return metrics, all_pred_logits, all_labels
-        else:
-            return metrics
+
+        if return_label_hidden and all_label_hiddens:
+            label_hiddens = torch.cat(all_label_hiddens, dim=0)
+            return metrics, label_hiddens
+
+        return metrics
