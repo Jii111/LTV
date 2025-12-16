@@ -82,7 +82,7 @@ def get_mean_head_activations(dataset, model, model_config, tokenizer, n_icl_exa
     prepend_bos =  False if model_config['prepend_bos'] else True
 
     for n in range(N_TRIALS):
-        word_pairs = dataset['train'][np.random.choice(len(dataset['train']),n_icl_examples, replace=False)]
+        word_pairs = dataset['train'][np.random.choice(len(dataset['train']),min(n_icl_examples, len(dataset['train'])), replace=False)]
         #word_pairs = {"input": [x["input"] for x in dataset['train']], "output": [x["output"] for x in dataset['train']]}
         
         word_pairs_test = dataset['validation'][np.random.choice(filter_set,n_test_examples, replace=False)]
@@ -104,6 +104,7 @@ def get_mean_head_activations(dataset, model, model_config, tokenizer, n_icl_exa
             stack_filtered[:,:,idx_map[i]] = stack_initial[:,:,i:j+1].mean(axis=2) # Average activations of multi-token words across all its tokens
         
         stack_filtered = stack_filtered.cpu()
+        
         activation_storage[n] = stack_filtered
         
         del stack_filtered, stack_initial
@@ -346,6 +347,12 @@ def compute_function_vector(mean_activations, indirect_effect, model, model_conf
     topk_vals, topk_inds  = torch.topk(mean_indirect_effect.view(-1), k=n_top_heads, largest=True)
     top_lh = list(zip(*np.unravel_index(topk_inds, h_shape), [round(x.item(),4) for x in topk_vals]))
     top_heads = top_lh[:n_top_heads]
+    
+    flat_vals = mean_indirect_effect.view(-1)
+    flat_inds = torch.arange(flat_vals.numel(), device=flat_vals.device)
+    all_lh = list(zip(
+    *np.unravel_index(flat_inds.cpu().numpy(), h_shape),
+    [round(x.item(), 4) for x in flat_vals]))
 
     # Compute Function Vector as sum of influential heads
     function_vector = torch.zeros((1,1,model_resid_dim)).to(device)
@@ -374,7 +381,7 @@ def compute_function_vector(mean_activations, indirect_effect, model, model_conf
     function_vector = function_vector.to(model.dtype)
     function_vector = function_vector.reshape(1, model_resid_dim)
 
-    return function_vector, top_heads
+    return function_vector, top_heads, all_lh
 
 def compute_universal_function_vector(mean_activations, model, model_config, n_top_heads=10):
     """
@@ -475,7 +482,11 @@ def compute_universal_function_vector(mean_activations, model, model_config, n_t
                      (30, 5, -0.0742), (30, 6, -0.0742), (30, 23, -0.0742), (30, 17, -0.0742), (30, 7, -0.0743), (30, 19, -0.0743), (30, 4, -0.0744), (30, 18, -0.0744), (30, 8, -0.0745), 
                      (30, 24, -0.0748), (30, 20, -0.0749), (30, 0, -0.0752), (30, 12, -0.0779), (30, 27, -0.0944), (25, 6, -0.1181), (25, 15, -0.1267), (25, 4, -0.1271), (25, 17, -0.1271), 
                      (25, 24, -0.1271), (25, 8, -0.1273), (25, 26, -0.1275), (25, 28, -0.1275)]
-    
+    elif 'Llama-3-8B' in model_config['name_or_path']:
+        top_heads = [(13, 27, 0.0441), (10, 5, 0.0101), (11, 5, 0.0092), (28, 15, 0.0052), (10, 12, 0.0047), (12, 9, 0.0044), (15, 17, 0.0039), (9, 27, 0.0037), (15, 1, 0.0035), (11, 30, 0.0031), 
+                     (13, 4, 0.0029), (14, 27, 0.0029), (13, 13, 0.0027), (26, 15, 0.0027), (20, 14, 0.0025), (16, 19, 0.0023), (13, 6, 0.0021), (14, 6, 0.002), (12, 21, 0.0019), (16, 17, 0.0019), 
+                     (10, 7, 0.0018), (12, 0, 0.0018), (14, 14, 0.0018), (15, 10, 0.0018), (19, 3, 0.0018), (15, 20, 0.0017), (17, 27, 0.0017), (30, 25, 0.0017), (11, 28, 0.0016), (13, 16, 0.0016), 
+                     (14, 4, 0.0016), (12, 7, 0.0015), (14, 19, 0.0015), (14, 21, 0.0015), (10, 14, 0.0014), (18, 29, 0.0014), (31, 2, 0.0014), (12, 26, 0.0013), (13, 31, 0.0013), (15, 30, 0.0013)]
     top_heads = top_heads[:n_top_heads]
 
     # Compute Function Vector as sum of influential heads

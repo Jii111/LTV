@@ -104,24 +104,19 @@ class ICLVectorEvaluator():
             num_classes = len(class_token_ids)
 
             all_pred_logits = []
-            all_labels = []
 
         # ============================
         # 4. Main Evaluation Loop
         # ============================
-        topk = {}
-        test_order = {}
-
         for opt in optimizers:
             task_vector = opt(dev_task_vector, test_task_vector)
             logit_list = []
-            answer_ids_list = []
 
             for d in test_data:
                 query = question_prompt.format_map(d)
 
                 # few-shot prompt 구성
-                demon = []
+                demon = []; answer_labels = []
                 if fs_eval:
                     labels_map = list(range(len(d['demon'])))
                     if shuffle_labels:
@@ -135,14 +130,7 @@ class ICLVectorEvaluator():
                 logits = self.evaluator.write_activation(
                     query, task_vector, demon, intervention_mode, add_to, format_dict)
                 logits = logits.detach().cpu()
-
-                answer_ids = self.evaluator.get_answer_id(
-                    query=query, answer=d['output'], proj_tokens=format_dict.get("proj_tokens"))
-
-                # top-k metric에서 사용
                 logit_list.append(logits)
-                answer_ids_list.append(answer_ids)
-
                 # ============================
                 # LM logits → class logits (K)
                 # ============================
@@ -154,41 +142,20 @@ class ICLVectorEvaluator():
                     probs = torch.softmax(class_logits, dim=-1)
 
                     all_pred_logits.append(probs.detach().cpu())
-                    token_str = self.tokenizer.decode(answer_ids[0]).strip()
-                    print(class_token_ids)
-                    print(answer_ids[0])
-                    print(answer_ids)
-                    if answer_ids[0] in class_token_ids:
-                        label = class_token_ids.index(answer_ids[0])
-                        all_labels.append(label)
-                    else:
-                        print("Not matching Label idx")
-
-                    
-
-            # 기존 top-k metric도 유지
-            topk[opt.name], test_order[opt.name] = top_k_metric(self.config['top_k'], logit_list, answer_ids_list)
 
         # ============================
-        # 5. Return format
-        # ============================
-        if not return_logits:
-            if return_none:
-                return topk['none'], test_order['none']
-            return topk, test_order
-
-        # ============================
-        # 6. accuracy + macro F1 (classification)
+        # 5. accuracy + macro F1 (classification)
         # ============================
         all_pred_logits = torch.stack(all_pred_logits, dim=0)  # (N, K)
         pred_labels = all_pred_logits.argmax(dim=-1).tolist()
+        answer_labels = [class_texts.index(d['output']) for d in test_data]
 
         TP = [0]*num_classes
         FP = [0]*num_classes
         FN = [0]*num_classes
         acc_list = []
 
-        for y_true, y_pred in zip(all_labels, pred_labels):
+        for y_true, y_pred in zip(answer_labels, pred_labels):
             acc_list.append(int(y_true == y_pred))
             if y_true == y_pred:
                 TP[y_true] += 1
@@ -214,13 +181,8 @@ class ICLVectorEvaluator():
             'acc': sum(acc_list) / len(acc_list),
             'macro_f1': sum(f1) / num_classes
         }
-        
-        print("metrics :")
-        print(metrics)
-        print("acc :")
-        print(topk)
 
-        return metrics, all_pred_logits, all_labels, topk
+        return metrics, all_pred_logits, answer_labels
 
 
     def single_hid_test(self, dummy_queries, dev_data, test_data, layer_indices, fs_eval=False, shuffle_labels=False, intervention_mode='replace', question_prompt='{input}', format_dict={}):
