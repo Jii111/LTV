@@ -48,6 +48,8 @@ def target_layer_selection(args, model_wrapper, tokenizer, evaluator, context_ve
                     demonstration='',
                     use_cache=args.config['use_cache']
                 )
+                print("+++debuging val_result+++")
+                print(val_result)
                 metric_value = val_result[args.metric]
                 print(f"[ICL TV] Layer {layer} validation {args.metric}: {metric_value:.4f}")
                 if metric_value > best_metric:
@@ -85,7 +87,7 @@ def get_acc(entry):
         return entry.get("acc", -1)
 
     return -1
-
+@torch.no_grad()
 def main(args):
     utils.set_seed(args.config['seed'])
     args.device = utils.set_device(args.gpu)
@@ -117,7 +119,7 @@ def main(args):
     args.format_dict = {'eos': args.config['eos'], 'proj_tokens': args.config['proj_tokens']}
     metric = {'top_k': {'max_top': 1}}
     
-    model, tokenizer, model_config, model_config_fv = utils.load_model_tokenizer(
+    model, tokenizer, model_config = utils.load_model_tokenizer(
             args.model_name, args.device, output_hidden_states=True
         )
 
@@ -194,15 +196,14 @@ def main(args):
             test_few, test_few_logits, test_few_labels = test_evaluator.evaluate(
                 base_wrapper, tokenizer, demonstration=baseline_demon,
                 use_cache=args.config['use_cache'],
-                return_logits=args.config['return_logits'],
-                logits_mode=args.config['logits_mode']
+                return_logits=args.config['return_logits']
             )
             result_dict['test_result']['few_shot'].append(test_few)
             print(f"Test few-shot: {test_few}\n")
 
 
         ################## I2CL baseline ##################
-        print("Evaluating ICL TV baseline...")
+        print("Evaluating I2CL baseline...")
         i2cl_start = time.time()
         temp_demon_list, temp_result_list = [], []
         temp_demon_list.append((demon, split_demon, demon_indices))
@@ -218,38 +219,39 @@ def main(args):
         demon_list = [demon]
         split_demon_list = split_demon
         all_latent_dicts = []
-        if not args.config['split_demon']:
-            target_demon_list = demon_list[0]
-        else:
-            target_demon_list = split_demon_list
-        for cur_demon in target_demon_list:
-            with base_wrapper.extract_latent():
-                demon_token = tokenizer(cur_demon, return_tensors='pt').to(args.device)
-                _ = model(**demon_token)
-            all_latent_dicts.append(base_wrapper.latent_dict)
-            base_wrapper.reset_latent_dict()
+        with torch.no_grad():
+            if not args.config['split_demon']:
+                target_demon_list = demon_list[0]
+            else:
+                target_demon_list = split_demon_list
+            for cur_demon in target_demon_list:
+                with base_wrapper.extract_latent():
+                    demon_token = tokenizer(cur_demon, return_tensors='pt').to(args.device)
+                    _ = model(**demon_token)
+                all_latent_dicts.append(base_wrapper.latent_dict)
+                base_wrapper.reset_latent_dict()
 
         # 3. generate context vector 
         context_vector_dict = base_wrapper.get_context_vector(all_latent_dicts, args.config)
         del all_latent_dicts
         
         # 4. evaluate i2cl
-        with base_wrapper.inject_latent(
-                context_vector_dict, args.config,
-                base_wrapper.linear_coef
-                ):
-            test_i2cl, test_i2cl_logits, test_i2cl_labels = test_evaluator.evaluate(
-                base_wrapper, tokenizer, demonstration='',
-                use_cache=args.config['use_cache'], return_logits=args.config['return_logits'],
-                logits_mode=args.config['logits_mode']
-                )
+        with torch.no_grad():
+            with base_wrapper.inject_latent(
+                    context_vector_dict, args.config,
+                    base_wrapper.linear_coef
+                    ):
+                test_i2cl, test_i2cl_logits, test_i2cl_labels = test_evaluator.evaluate(
+                    base_wrapper, tokenizer, demonstration='',
+                    use_cache=args.config['use_cache'], return_logits=args.config['return_logits']
+                    )
         i2cl_end = time.time()
 
         result_dict['test_result']['i2cl_default'].append(test_i2cl)
         result_dict['time']['i2cl_default'].append(i2cl_end - i2cl_start)
         print(f"Test I2CL_default: {test_i2cl}\n")
 
-        if args.config.get('return_logits', False) and test_few_logits is not None:
+        if args.config.get('compute_kl_divergence', False) and test_few_logits is not None:
             assert test_few_labels == test_i2cl_labels, "Label mismatch between few-shot and I2CL results!"
             mean_kl_i2cl = utils.compute_kl_divergence(
                 test_few_logits, test_i2cl_logits, is_qwen='Qwen' in args.model_name
@@ -280,17 +282,17 @@ def main(args):
         demon_list = [demon]
         split_demon_list = split_demon
         all_latent_dicts = []
-
-        if not args.config['split_demon']:
-            target_demon_list = demon_list[0]
-        else:
-            target_demon_list = split_demon_list
-        for cur_demon in target_demon_list:
-            with base_wrapper.extract_latent():
-                demon_token = tokenizer(cur_demon, return_tensors='pt').to(args.device)
-                _ = model(**demon_token)
-            all_latent_dicts.append(base_wrapper.latent_dict)
-            base_wrapper.reset_latent_dict()
+        with torch.no_grad():
+            if not args.config['split_demon']:
+                target_demon_list = demon_list[0]
+            else:
+                target_demon_list = split_demon_list
+            for cur_demon in target_demon_list:
+                with base_wrapper.extract_latent():
+                    demon_token = tokenizer(cur_demon, return_tensors='pt').to(args.device)
+                    _ = model(**demon_token)
+                all_latent_dicts.append(base_wrapper.latent_dict)
+                base_wrapper.reset_latent_dict()
              
         # 3. generate context vector    
         context_vector_dict = base_wrapper.get_context_vector(all_latent_dicts, args.config)
@@ -301,15 +303,15 @@ def main(args):
         result_dict['i2cl_linear_coef(train)'][args.run_name] = base_wrapper.linear_coef.tolist()
 
         # 4. evaluate i2cl
-        with base_wrapper.inject_latent(
-                context_vector_dict, args.config,
-                base_wrapper.linear_coef
-                ):
-            test_i2cl, test_i2cl_logits, test_i2cl_labels = test_evaluator.evaluate(
-                base_wrapper, tokenizer, demonstration='',
-                use_cache=args.config['use_cache'], return_logits=args.config['return_logits'],
-                logits_mode=args.config['logits_mode']
-                )
+        with torch.no_grad():
+            with base_wrapper.inject_latent(
+                    context_vector_dict, args.config,
+                    base_wrapper.linear_coef
+                    ):
+                test_i2cl, test_i2cl_logits, test_i2cl_labels = test_evaluator.evaluate(
+                    base_wrapper, tokenizer, demonstration='',
+                    use_cache=args.config['use_cache'], return_logits=args.config['return_logits']
+                    )
 
         i2cl_end = time.time()
         result_dict['test_result']['i2cl_train'].append(test_i2cl)
@@ -330,11 +332,12 @@ def main(args):
         print("Evaluating ICL TV baseline...")
         m1_start = time.time()
         all_latent_dicts = []
-        with base_wrapper.extract_latent():
-            demon_token = tokenizer(demon, return_tensors='pt').to(args.device)
-            _ = model(**demon_token)
-        all_latent_dicts.append(base_wrapper.latent_dict)
-        base_wrapper.reset_latent_dict()
+        with torch.no_grad():
+            with base_wrapper.extract_latent():
+                demon_token = tokenizer(demon, return_tensors='pt').to(args.device)
+                _ = model(**demon_token)
+            all_latent_dicts.append(base_wrapper.latent_dict)
+            base_wrapper.reset_latent_dict()
 
         context_vector_dict = base_wrapper.get_context_vector(all_latent_dicts, args.config)
         del all_latent_dicts
@@ -348,8 +351,7 @@ def main(args):
             test_m1, test_m1_logits, test_m1_labels = test_evaluator.evaluate(
                 base_wrapper, tokenizer, demonstration='',
                 use_cache=args.config['use_cache'],
-                return_logits=args.config['return_logits'],
-                logits_mode=args.config['logits_mode']
+                return_logits=args.config['return_logits']
             )
         m1_end = time.time()
         result_dict['test_result']['ICLTV'].append(test_m1)
@@ -385,14 +387,14 @@ def main(args):
         # 1. filter dataset to cases where model gets it correct
         fs_results_validation = n_shot_eval_no_intervention(
             dataset=dataset_fv, task_name=args.dataset_name, n_shots=args.shot_num, model=model,
-            model_config=model_config_fv, tokenizer=tokenizer, compute_ppl=True, test_split='validation',
+            model_config=model_config, tokenizer=tokenizer, compute_ppl=True, test_split='validation',
             prefixes=args.prefixes, separators=args.separators
             )
         filter_set_validation = np.where(np.array(fs_results_validation['clean_rank_list']) == 0)[0]
         utils.set_seed(args.config['seed']+run_id)
         fs_results = n_shot_eval_no_intervention(
             dataset=dataset_fv, task_name=args.dataset_name, n_shots=args.shot_num, model=model,
-            model_config=model_config_fv, tokenizer=tokenizer, compute_ppl=True, prefixes=args.prefixes,
+            model_config=model_config, tokenizer=tokenizer, compute_ppl=True, prefixes=args.prefixes,
             separators=args.separators
             )
         filter_set = np.where(np.array(fs_results['clean_rank_list']) == 0)[0]
@@ -401,7 +403,7 @@ def main(args):
         utils.set_seed(args.config['seed']+run_id)
         class_num = train_dataset.class_num
         mean_activations = get_mean_head_activations(
-            dataset_fv, model=model, model_config=model_config_fv, tokenizer=tokenizer,
+            dataset_fv, model=model, model_config=model_config, tokenizer=tokenizer,
             n_icl_examples=args.shot_num // class_num,
             N_TRIALS=args.n_mean_activations_trials, prefixes=args.prefixes, separators=args.separators,
             filter_set=filter_set_validation
@@ -412,9 +414,10 @@ def main(args):
         # 3. load or re-compute indirect_effect values
         ## TODO : if not using universal_set
         fv, top_heads = compute_universal_function_vector(
-            mean_activations, model, model_config=model_config_fv, n_top_heads=args.n_top_heads
+            mean_activations, model, model_config=model_config, n_top_heads=args.n_top_heads
             )
 
+        
         # 4. evaluate FV
         if config['edit_layer'] == -2:
             if 'Qwen2.5-7B' in args.model_name:
@@ -422,52 +425,35 @@ def main(args):
             elif 'Llama-3.1-8B' in args.model_name:
                 eval_edit_layer = 11
             else: # in case for other model
-                eval_edit_layer = model_config_fv['n_layers']//3 
+                eval_edit_layer = model_config.fv['n_layers']//3 
 
         utils.set_seed(args.config['seed'])
         fv_results = {}
         fv_logits = {}
         fv_labels = {}
         if isinstance(eval_edit_layer, int):
-            fv_results[eval_edit_layer], fv_logits[eval_edit_layer], fv_labels[eval_edit_layer] = n_shot_eval(
-                dataset=dataset_fv, task_name=args.dataset_name, fv_vector=fv, edit_layer=eval_edit_layer,
-                n_shots=0, prefixes=args.prefixes, separators=args.separators, test_type='test',
-                model=model, model_config=model_config_fv, tokenizer=tokenizer, filter_set=filter_set,
+            fv_results, test_fv_logits, fv_answer_labels = test_evaluator.evaluate(
+                model_wrapper=base_wrapper, tokenizer=tokenizer,
+                fv_vector=fv, fv_edit_layer=eval_edit_layer,model_config=model_config,
                 return_logits=args.config['return_logits']
-                )
-            fv_results_file_suffix = f'_fv_layer_{eval_edit_layer}_sweep.json'
+            )
         else:
             raise ValueError("Not allowed to sweep layers in this experiment")
 
-
-        fv_results_file_name = make_valid_path_name(f'{args.save_dir}/' + fv_results_file_suffix)
-        args.zs_results_file_name = fv_results_file_name
-        fv_result_dict[args.run_name] = fv_results
-        with open(fv_results_file_name, 'w') as results_file:
-            json.dump(fv_result_dict, results_file, indent=2)
-
-        best_layer = max(fv_results, key=lambda l: get_acc(fv_results[l]))
-
-        test_fv, test_fv_logits, test_fv_labels = get_acc(fv_results[best_layer]), fv_logits[best_layer], fv_labels[
-            best_layer]
-
         fv_end = time.time()
-        result_dict['test_result']['fv'].append(test_fv)
-        result_dict['best_replace_layer']['fv'].append(best_layer)
+        result_dict['test_result']['fv'].append(fv_results)
+        result_dict['best_replace_layer']['fv'].append(eval_edit_layer)
         result_dict['time']['fv'].append(fv_end - fv_start)
-        print(f"Test FV: {test_fv}\n")
+        print(f"Test FV: {fv_results}\n")
 
         if args.config.get('return_logits', False) and test_few_logits is not None:
-            assert test_few_labels == test_fv_labels, "Label mismatch between few-shot and FV results!"
+            assert test_few_labels == fv_answer_labels, "Label mismatch between few-shot and FV results!"
             mean_kl_fv = utils.compute_kl_divergence(
                 test_few_logits, test_fv_logits, is_qwen='Qwen' in args.model_name
             )
             print(f"KL divergence (Few-shot vs FV): {mean_kl_fv:.4f}")
-            kl_dict['fv'][args.run_name] = {
-                "mean_kl": mean_kl_fv
-            }
+            kl_dict['fv'][args.run_name] = {"mean_kl": mean_kl_fv}
 
-        
         print("Evaluating State Vector baseline...")
         sv_start = time.time()
             
@@ -481,6 +467,9 @@ def main(args):
         for i in range(len(test_data)):
             test_data[i]['demon'] = []
 
+        acc, _ = svevaluator.single_ICL_test(test_data, format_dict=args.format_dict)
+        print("ZS acc : ", acc)
+
         for i in range(len(test_data)):
             test_data[i]['demon'] = dev_data
         acc, _ = svevaluator.single_ICL_test(test_data, format_dict=args.format_dict)
@@ -490,10 +479,11 @@ def main(args):
         nshot, fshot = ('zs', False)
             
         run_name = f"{nshot}_raw_layer{eval_edit_layer}"
-        optimizer_weight = [[1, 2, 4, 8, 16, 0]]
-        optimizer_config = {"fix-one-step": {"lr": [1], "weight": optimizer_weight}}
+        #optimizer_weight = [[1, 2, 4, 8, 16, 0]]
+        #optimizer_config = {"fix-one-step": {"lr": [1], "weight": optimizer_weight}}
+        optimizer_config = {"fixed": {"beta": [1, 1, 1, 1, 1, 1, 1]}}
         label_info = train_dataset.get_dmonstration_template()['options']
-        test_sv, test_sv_logits, test_sv_labels = svevaluator.single_atv_test(dummy_queries=[valid_data[0]],
+        test_sv, test_sv_logits, test_sv_labels, t = svevaluator.single_atv_test(dummy_queries=[valid_data[0]],
                                                 dev_data=[dev_data],
                                                 test_data=test_data, class_texts = label_info,
                                                 layer_indices=list(range(eval_edit_layer + 1)),
@@ -505,21 +495,18 @@ def main(args):
                                                 question_prompt=args.config['question_prompt'],
                                                 format_dict=args.format_dict,
                                                 return_logits=args.config['return_logits'])
-        for k, v in acc.items():
-            iv_result[run_name + '_' + k] = v[0]
-            print(run_name + '_' + k, v[0])
 
         sv_end = time.time()
         result_dict['test_result']['state vector'].append(test_sv)
         result_dict['time']['state vector'].append(sv_end - sv_start)
         print(f"Test State Vector: {test_sv}\n")
 
-        if args.config.get('return_logits', False) and test_few_logits is not None:
-            assert test_few_labels == test_sv_labels[:len(test_few_labels)], "Label mismatch between few-shot and FV results!"
+        if args.config.get('compute_kl_divergence', False) and test_few_logits is not None:
+            assert test_few_labels == test_sv_labels, "Label mismatch between few-shot and FV results!"
             mean_kl_sv = utils.compute_kl_divergence(
-                test_few_logits, test_sv_logits[:len(test_few_labels)], is_qwen='Qwen' in args.model_name
+                test_few_logits, test_sv_logits, is_qwen='Qwen' in args.model_name
             )
-            print(f"KL divergence (Few-shot vs FV): {mean_kl_sv:.4f}")
+            print(f"KL divergence (Few-shot vs SV): {mean_kl_sv:.4f}")
             kl_dict['state vector'][args.run_name] = {
                     "mean_kl": mean_kl_sv
                 }
@@ -563,15 +550,14 @@ def main(args):
                 test_m2, test_m2_logits, test_m2_labels = test_evaluator.evaluate(
                     m2_wrapper, tokenizer, demonstration='',
                     use_cache=args.config['use_cache'],
-                    return_logits=args.config['return_logits'],
-                    logits_mode=args.config['logits_mode']
+                    return_logits=args.config['return_logits']
                 )
             m2_end = time.time()
             m2_test_dict[q_key] = test_m2
             print(f"Test M2({q_key}): {test_m2}\n")
             result_dict['time']['m2'].append(m2_end - m2_start)
 
-            if args.config.get('return_logits', False) and test_few_logits is not None:
+            if args.config.get('compute_kl_divergence', False) and test_few_logits is not None:
                 mean_kl = utils.compute_kl_divergence(
                     test_few_logits, test_m2_logits, is_qwen='Qwen' in args.model_name
                 )
@@ -606,15 +592,14 @@ def main(args):
                     test_m2a, test_m2a_logits, test_m2a_labels = test_evaluator.evaluate(
                         m2_adaptive_wrapper, tokenizer, demonstration='',
                         use_cache=args.config['use_cache'],
-                        return_logits=args.config['return_logits'],
-                        logits_mode=args.config['logits_mode']
+                        return_logits=args.config['return_logits']
                     )
                 m2a_end = time.time()
                 utils.nested_set(m2a_test_dict, [q_key, lam_key], test_m2a)
                 result_dict['time']['m2_adaptive'].append(m2a_end - m2a_start)
                 print(f"Test M2-Adaptive: {test_m2a}\n")
 
-                if args.config.get('return_logits', False) and test_few_logits is not None:
+                if args.config.get('compute_kl_divergence', False) and test_few_logits is not None:
                     mean_kl_a = utils.compute_kl_divergence(
                         test_few_logits, test_m2a_logits, is_qwen='Qwen' in args.model_name
                     )
@@ -644,10 +629,79 @@ def main(args):
     print(f"Results saved to: {args.save_dir}")
     print(f"{'=' * 60}\n")
 
-
+# TODO
 def get_args():
     parser = argparse.ArgumentParser()
     parser.add_argument('--config_path', type=str, default='configs/config_baseline_all.py')
+    
+    # Basic / Runtime
+    parser.add_argument("--gpus", nargs="+", default=["0"])
+    parser.add_argument("--return_logits", type=bool, default=True)
+    parser.add_argument("--demo_seed", type=int, default=12)
+    parser.add_argument("--run_baseline", type=bool, default=True)
+    parser.add_argument("--metric", type=str, default="acc")  # acc | macro_f1
+    parser.add_argument("--load_in_8bit", type=bool, default=True)
+    parser.add_argument("--use_cache", type=bool, default=False)
+
+    parser.add_argument("--num_train_queries", nargs="+", type=int, default=[256])
+    parser.add_argument("--ridge_lambda", nargs="+", type=float, default=[1.0])
+    parser.add_argument("--extraction_batch_size", type=int, default=1)
+    parser.add_argument("--inference_batch_size", type=int, default=1)
+
+    parser.add_argument("--target_layers", default=None)
+    parser.add_argument("--module", nargs="+", default=["hidden"])
+    parser.add_argument("--tok_pos", type=str, default="last")
+
+    # Data settings
+    parser.add_argument("--val_data_num", type=int, default=32)
+    parser.add_argument("--test_data_num", type=int, default=500)
+    parser.add_argument("--sample_method", type=str, default="uniform")
+    parser.add_argument("--use_instruction", type=bool, default=False)
+    parser.add_argument("--add_extra_query", type=bool, default=True)
+    parser.add_argument("--example_separator", type=str, default="\n")
+
+    # Evaluation
+    parser.add_argument("--compute_kl_divergence", type=bool, default=True)
+    parser.add_argument("--save_task_vectors", type=bool, default=False)
+    parser.add_argument("--evaluate_reconstruction", type=bool, default=False)
+
+    # SV baseline
+    parser.add_argument("--question_prompt", type=str, default="{input}")
+    parser.add_argument("--eos", type=str, default="\n\n")
+    parser.add_argument("--proj_tokens", type=str, default="→")
+
+    # I2CL baseline
+    parser.add_argument("--init_value", nargs="+", type=float, default=[0.1, 1.0])
+
+    parser.add_argument("--layer", type=str, default="all")
+    parser.add_argument("--inject_method", type=str, default="linear")
+    parser.add_argument("--inject_pos", type=str, default="all")
+    parser.add_argument("--gen_cv_method", type=str, default="context")
+    parser.add_argument("--post_fuse_method", type=str, default="mean")
+    parser.add_argument("--split_demon", type=bool, default=True)
+    parser.add_argument("--gen_example_method", type=str, default="normal")
+
+    parser.add_argument("--add_noise", type=bool, default=True)
+    parser.add_argument("--noise_scale", type=float, default=0.001)
+    parser.add_argument("--epochs", type=int, default=100)
+    parser.add_argument("--optim", type=str, default="adamW")
+    parser.add_argument("--grad_bs", type=int, default=2)
+    parser.add_argument("--lr", type=float, default=0.01)
+    parser.add_argument("--wd", type=float, default=1e-3)
+    parser.add_argument("--cali_example_method", type=str, default="normal")
+
+    # Function Vector baseline
+    parser.add_argument("--edit_layer", type=int, default=-2)
+    parser.add_argument("--n_top_heads", type=int, default=10)
+    parser.add_argument("--n_mean_activations_trials", type=int, default=20)
+
+    parser.add_argument("--separators", type=dict,
+                        default={"input": "Q:", "output": "A:", "instructions": ""})
+    parser.add_argument("--prefixes", type=dict,
+                        default={"input": "\n", "output": "\n\n", "instructions": ""})
+    parser.add_argument("--revision", default=None)
+    
+    
     return parser.parse_args()
 
 
