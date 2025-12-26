@@ -56,7 +56,7 @@ def load_model_tokenizer(model_name, device, output_hidden_states=True, load_in_
     if 'Qwen' in model_name:
         model = AutoModelForCausalLM.from_pretrained(
                 model_name,
-                dtype=torch.bfloat16,
+                torch_dtype=torch.bfloat16,
                 )
     else:
         model = AutoModelForCausalLM.from_pretrained(model_name,

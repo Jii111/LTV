@@ -320,6 +320,7 @@ class Evaluator(nn.Module):
 
         # loop over all data
         with torch.no_grad():
+            all_label_hiddens = [] if return_label_hidden else None
             batch_iter = tqdm(
                 enumerate(range(0, len(all_inputs), self.batch_size)),
                 total=(len(all_inputs) + self.batch_size - 1) // self.batch_size,
@@ -351,23 +352,32 @@ class Evaluator(nn.Module):
                 # set global variables
                 gv.ATTN_MASK_START = torch.zeros_like(pred_loc)
                 gv.ATTN_MASK_END = pred_loc
+                # Build kwargs only with supported keys to avoid TypeError on some models
+                forward_vars = model.forward.__code__.co_varnames
+                extra_kwargs = {}
+                if 'return_head_outputs' in forward_vars:
+                    extra_kwargs['return_head_outputs'] = return_head_outputs
+                if 'return_q_states' in forward_vars:
+                    extra_kwargs['return_q_states'] = return_q_states
+                if 'output_hidden_states' in forward_vars:
+                    extra_kwargs['output_hidden_states'] = return_label_hidden
+
                 if use_cache:
                     attn_mask = torch.cat([demon_attn_mask, attn_mask], dim=1)
                     with torch.no_grad():
                         output = model(
                             input_ids=input_ids, attention_mask=attn_mask,
                             past_key_values=demon_past_key_values, use_cache=use_cache,
-                            return_head_outputs=return_head_outputs,
-                            return_q_states=return_q_states
+                            **extra_kwargs
                         )
                 else:
                     with torch.no_grad():
                         output = model(
                             input_ids=input_ids, attention_mask=attn_mask, use_cache=False,
-                            return_head_outputs=return_head_outputs,
-                            return_q_states=return_q_states
+                            **extra_kwargs
                         )
                 logits = output.logits
+                hidden_states = output.hidden_states if return_label_hidden else None
 
 
                 pred_logits = logits[torch.arange(logits.size(0)), pred_loc]  # (B,V)
@@ -408,6 +418,11 @@ class Evaluator(nn.Module):
                         print(f"  used token  : {first_tok} -> '{first_tok_dec}'")
                         print(f"  num_tokens  : {len(toks)}\n")
                     print(f"{'=' * 60}\n")
+
+                if return_label_hidden and hidden_states is not None:
+                    # Store last-layer hidden states at label positions only (consistent with TV methods)
+                    label_hidden = hidden_states[-1][torch.arange(hidden_states[-1].size(0)), pred_loc]
+                    all_label_hiddens.append(label_hidden.detach().cpu())
 
                 if return_logits:
                     all_pred_logits.append(scores.detach().cpu())
@@ -458,8 +473,15 @@ class Evaluator(nn.Module):
         print("macro_acc : ", macro_acc)
         metrics = {'acc': acc, 'macro_f1': macro_f1}
 
-        if return_logits:  # ✅ 수정
+        if return_logits:
             all_pred_logits = torch.cat(all_pred_logits, dim=0)  # (N, num_classes)
+            if return_label_hidden and all_label_hiddens:
+                label_hiddens = torch.cat(all_label_hiddens, dim=0)
+                return metrics, all_pred_logits, all_labels, label_hiddens
             return metrics, all_pred_logits, all_labels
-        else:
-            return metrics
+
+        if return_label_hidden and all_label_hiddens:
+            label_hiddens = torch.cat(all_label_hiddens, dim=0)
+            return metrics, label_hiddens
+
+        return metrics
