@@ -14,7 +14,7 @@ import argparse
 import copy
 import gc
 from sv_utils.TVeval import ICLVectorEvaluator
-from sv_utils.TVframework import Evaluator
+from sv_utils.TVframework import SVEvaluator
 from sv_utils.utils import set_rand_seed
 
 import argparse
@@ -36,26 +36,30 @@ from wrapper_m2 import M2AdaptiveWrapper, M2Wrapper
 task_queue = None
 
 
-def target_layer_selection(args, model_wrapper, tokenizer, evaluator, context_vector_dict):
+def target_layer_selection(args, model_wrapper, tokenizer, evaluator, tv_type, context_vector, model_config=None):
     num_layers = model_wrapper.num_layers
     best_layer = 0
     best_metric = float('-inf')
     with torch.no_grad():
         for layer in range(num_layers):
-            with model_wrapper.replace_latent(context_vector_dict, [layer], args.config):
+            if tv_type == 'icl_tv':
+                with model_wrapper.replace_latent(context_vector, [layer], args.config):
+                    val_result = evaluator.evaluate(
+                        model_wrapper, tokenizer, demonstration='',
+                        use_cache=args.config['use_cache']
+                    )
+            elif tv_type == 'function_vector':
                 val_result = evaluator.evaluate(
-                    model_wrapper, tokenizer,
-                    demonstration='',
-                    use_cache=args.config['use_cache']
+                    model_wrapper, tokenizer, demonstration='',
+                    use_cache=args.config['use_cache'],
+                    fv_vector=context_vector, edit_layer=layer, model_config=model_config
                 )
-                print("+++debuging val_result+++")
-                print(val_result)
-                metric_value = val_result[args.metric]
-                print(f"[ICL TV] Layer {layer} validation {args.metric}: {metric_value:.4f}")
-                if metric_value > best_metric:
-                    best_metric = metric_value
-                    best_layer = layer
-    print(f"[ICL TV] Selected layer {best_layer} (metric={best_metric:.4f})")
+            metric_value = val_result[args.metric]
+            print(f"Layer {layer} validation {args.metric}: {metric_value:.4f}")
+            if metric_value > best_metric:
+                best_metric = metric_value
+                best_layer = layer
+    print(f"Selected layer {best_layer} (metric={best_metric:.4f})")
     return best_layer
 
 
@@ -152,7 +156,7 @@ def main(args):
     cv_save_dict = {}
 
     for run_id in tqdm(range(args.config['run_num']), desc="Overall Progress", position=0):
-        args.run_name = f'run_{run_id}'
+        args.run_name = f'run_{run_id} : {time.time()}'
         print(f"\n{'=' * 60}")
         print(f"Run {run_id + 1}/{args.config['run_num']}: {args.run_name}")
         print(f"{'=' * 60}\n")
@@ -203,321 +207,327 @@ def main(args):
 
 
         ################## I2CL baseline ##################
-        print("Evaluating I2CL baseline...")
-        i2cl_start = time.time()
-        temp_demon_list, temp_result_list = [], []
-        temp_demon_list.append((demon, split_demon, demon_indices))
-        cali_dataset = copy.deepcopy(train_dataset)
-        cali_dataset.all_data = [train_dataset.all_data[i] for i in demon_indices]
+        if args.config['run_i2cl']:
+            print("Evaluating I2CL baseline...")
+            i2cl_start = time.time()
+            temp_demon_list, temp_result_list = [], []
+            temp_demon_list.append((demon, split_demon, demon_indices))
+            cali_dataset = copy.deepcopy(train_dataset)
+            cali_dataset.all_data = [train_dataset.all_data[i] for i in demon_indices]
 
-        # 1. fix strength_params
-        # TODO: 선택으로 바꾸기
-        base_wrapper.init_strength(args.config,cali_train=False)
-        result_dict['i2cl_linear_coef(default)'][args.run_name] = base_wrapper.linear_coef.tolist()
+            # 1. fix strength_params
+            # TODO: 선택으로 바꾸기
+            base_wrapper.init_strength(args.config,cali_train=False)
+            result_dict['i2cl_linear_coef(default)'][args.run_name] = base_wrapper.linear_coef.tolist()
 
-        # 2. extract latents 
-        demon_list = [demon]
-        split_demon_list = split_demon
-        all_latent_dicts = []
-        with torch.no_grad():
-            if not args.config['split_demon']:
-                target_demon_list = demon_list[0]
-            else:
-                target_demon_list = split_demon_list
-            for cur_demon in target_demon_list:
-                with base_wrapper.extract_latent():
-                    demon_token = tokenizer(cur_demon, return_tensors='pt').to(args.device)
-                    _ = model(**demon_token)
-                all_latent_dicts.append(base_wrapper.latent_dict)
-                base_wrapper.reset_latent_dict()
-
-        # 3. generate context vector 
-        context_vector_dict = base_wrapper.get_context_vector(all_latent_dicts, args.config)
-        del all_latent_dicts
-        
-        # 4. evaluate i2cl
-        with torch.no_grad():
-            with base_wrapper.inject_latent(
-                    context_vector_dict, args.config,
-                    base_wrapper.linear_coef
-                    ):
-                test_i2cl, test_i2cl_logits, test_i2cl_labels = test_evaluator.evaluate(
-                    base_wrapper, tokenizer, demonstration='',
-                    use_cache=args.config['use_cache'], return_logits=args.config['return_logits']
-                    )
-        i2cl_end = time.time()
-
-        result_dict['test_result']['i2cl_default'].append(test_i2cl)
-        result_dict['time']['i2cl_default'].append(i2cl_end - i2cl_start)
-        print(f"Test I2CL_default: {test_i2cl}\n")
-
-        if args.config.get('compute_kl_divergence', False) and test_few_logits is not None:
-            assert test_few_labels == test_i2cl_labels, "Label mismatch between few-shot and I2CL results!"
-            mean_kl_i2cl = utils.compute_kl_divergence(
-                test_few_logits, test_i2cl_logits, is_qwen='Qwen' in args.model_name
-            )
-            print(f"KL divergence (Few-shot vs I2CL_default): {mean_kl_i2cl:.4f}")
-            kl_dict['i2cl_default'][args.run_name] = {
-                "mean_kl": mean_kl_i2cl
-            }
-
-        # 5. save context vector dict
-        for layer, subdict in context_vector_dict.items():
-            for module, activation in subdict.items():
-                if 'Qwen' in args.model_name:
-                    context_vector_dict[layer][module] = activation.to(torch.float32).cpu().numpy().tolist()
+            # 2. extract latents 
+            demon_list = [demon]
+            split_demon_list = split_demon
+            all_latent_dicts = []
+            with torch.no_grad():
+                if not args.config['split_demon']:
+                    target_demon_list = demon_list[0]
                 else:
-                    context_vector_dict[layer][module] = activation.cpu().numpy().tolist()
-        cv_save_dict[args.run_name] = context_vector_dict
+                    target_demon_list = split_demon_list
+                for cur_demon in target_demon_list:
+                    with base_wrapper.extract_latent():
+                        demon_token = tokenizer(cur_demon, return_tensors='pt').to(args.device)
+                        _ = model(**demon_token)
+                    all_latent_dicts.append(base_wrapper.latent_dict)
+                    base_wrapper.reset_latent_dict()
 
-        with open(args.save_dir + '/i2cl_default_save_dict.json', 'w') as f:
-            json.dump(cv_save_dict, f, indent=4)
-        '''
-        # 1. fix strength_params
-        # TODO: 선택으로 바꾸기
-        i2cl_start = time.time()
-        base_wrapper.init_strength(args.config,cali_train=True)
-    
-        # 2. extract latents 
-        demon_list = [demon]
-        split_demon_list = split_demon
-        all_latent_dicts = []
-        with torch.no_grad():
-            if not args.config['split_demon']:
-                target_demon_list = demon_list[0]
-            else:
-                target_demon_list = split_demon_list
-            for cur_demon in target_demon_list:
+            # 3. generate context vector 
+            context_vector_dict = base_wrapper.get_context_vector(all_latent_dicts, args.config)
+            del all_latent_dicts
+            
+            # 4. evaluate i2cl
+            with torch.no_grad():
+                with base_wrapper.inject_latent(
+                        context_vector_dict, args.config,
+                        base_wrapper.linear_coef
+                        ):
+                    test_i2cl, test_i2cl_logits, test_i2cl_labels = test_evaluator.evaluate(
+                        base_wrapper, tokenizer, demonstration='',
+                        use_cache=args.config['use_cache'], return_logits=args.config['return_logits']
+                        )
+            i2cl_end = time.time()
+
+            result_dict['test_result']['i2cl_default'].append(test_i2cl)
+            result_dict['time']['i2cl_default'].append(i2cl_end - i2cl_start)
+            print(f"Test I2CL_default: {test_i2cl}\n")
+
+            if args.config.get('compute_kl_divergence', False) and test_few_logits is not None:
+                assert test_few_labels == test_i2cl_labels, "Label mismatch between few-shot and I2CL results!"
+                mean_kl_i2cl = utils.compute_kl_divergence(
+                    test_few_logits, test_i2cl_logits, is_qwen='Qwen' in args.model_name
+                )
+                print(f"KL divergence (Few-shot vs I2CL_default): {mean_kl_i2cl:.4f}")
+                kl_dict['i2cl_default'][args.run_name] = {
+                    "mean_kl": mean_kl_i2cl
+                }
+
+            # 5. save context vector dict
+            for layer, subdict in context_vector_dict.items():
+                for module, activation in subdict.items():
+                    if 'Qwen' in args.model_name:
+                        context_vector_dict[layer][module] = activation.to(torch.float32).cpu().numpy().tolist()
+                    else:
+                        context_vector_dict[layer][module] = activation.cpu().numpy().tolist()
+            cv_save_dict[args.run_name] = context_vector_dict
+
+            with open(args.save_dir + '/i2cl_default_save_dict.json', 'w') as f:
+                json.dump(cv_save_dict, f, indent=4)
+            '''
+            # 1. fix strength_params
+            # TODO: 선택으로 바꾸기
+            i2cl_start = time.time()
+            base_wrapper.init_strength(args.config,cali_train=True)
+        
+            # 2. extract latents 
+            demon_list = [demon]
+            split_demon_list = split_demon
+            all_latent_dicts = []
+            with torch.no_grad():
+                if not args.config['split_demon']:
+                    target_demon_list = demon_list[0]
+                else:
+                    target_demon_list = split_demon_list
+                for cur_demon in target_demon_list:
+                    with base_wrapper.extract_latent():
+                        demon_token = tokenizer(cur_demon, return_tensors='pt').to(args.device)
+                        _ = model(**demon_token)
+                    all_latent_dicts.append(base_wrapper.latent_dict)
+                    base_wrapper.reset_latent_dict()
+                
+            # 3. generate context vector    
+            context_vector_dict = base_wrapper.get_context_vector(all_latent_dicts, args.config)
+            del all_latent_dicts
+            base_wrapper.calibrate_strength(context_vector_dict, cali_dataset, 
+                                        args.config, save_dir=args.save_dir, 
+                                        run_name=args.run_name)
+            result_dict['i2cl_linear_coef(train)'][args.run_name] = base_wrapper.linear_coef.tolist()
+
+            # 4. evaluate i2cl
+            with torch.no_grad():
+                with base_wrapper.inject_latent(
+                        context_vector_dict, args.config,
+                        base_wrapper.linear_coef
+                        ):
+                    test_i2cl, test_i2cl_logits, test_i2cl_labels = test_evaluator.evaluate(
+                        base_wrapper, tokenizer, demonstration='',
+                        use_cache=args.config['use_cache'], return_logits=args.config['return_logits']
+                        )
+
+            i2cl_end = time.time()
+            result_dict['test_result']['i2cl_train'].append(test_i2cl)
+            result_dict['time']['i2cl_train'].append(i2cl_end - i2cl_start)
+            print(f"Test I2CL_train: {test_i2cl}\n")
+
+            if args.config.get('compute_kl_divergence', False) and test_few_logits is not None:
+                assert test_few_labels == test_i2cl_labels, "Label mismatch between few-shot and I2CL results!"
+                mean_kl_i2cl = utils.compute_kl_divergence(
+                    test_few_logits, test_i2cl_logits, is_qwen='Qwen' in args.model_name
+                )
+                print(f"KL divergence (Few-shot vs I2CL_train): {mean_kl_i2cl:.4f}")
+                kl_dict['i2cl_train'][args.run_name] = {
+                    "mean_kl": mean_kl_i2cl
+                }
+            '''
+        ################## ICL task vector baseline ##################
+        if args.config['run_tv']:
+            print("Evaluating ICL TV baseline...")
+            m1_start = time.time()
+            all_latent_dicts = []
+            with torch.no_grad():
                 with base_wrapper.extract_latent():
-                    demon_token = tokenizer(cur_demon, return_tensors='pt').to(args.device)
+                    demon_token = tokenizer(demon, return_tensors='pt').to(args.device)
                     _ = model(**demon_token)
                 all_latent_dicts.append(base_wrapper.latent_dict)
                 base_wrapper.reset_latent_dict()
-             
-        # 3. generate context vector    
-        context_vector_dict = base_wrapper.get_context_vector(all_latent_dicts, args.config)
-        del all_latent_dicts
-        base_wrapper.calibrate_strength(context_vector_dict, cali_dataset, 
-                                    args.config, save_dir=args.save_dir, 
-                                    run_name=args.run_name)
-        result_dict['i2cl_linear_coef(train)'][args.run_name] = base_wrapper.linear_coef.tolist()
 
-        # 4. evaluate i2cl
-        with torch.no_grad():
-            with base_wrapper.inject_latent(
-                    context_vector_dict, args.config,
-                    base_wrapper.linear_coef
-                    ):
-                test_i2cl, test_i2cl_logits, test_i2cl_labels = test_evaluator.evaluate(
+            context_vector_dict = base_wrapper.get_context_vector(all_latent_dicts, args.config)
+            del all_latent_dicts
+            best_layer = target_layer_selection(
+                args, base_wrapper, tokenizer, val_evaluator, "icl_tv", context_vector_dict
+            )
+            result_dict['best_replace_layer']['ICLTV'].append(best_layer)
+
+            
+            with base_wrapper.replace_latent(context_vector_dict, [best_layer], args.config):
+                test_m1, test_m1_logits, test_m1_labels = test_evaluator.evaluate(
                     base_wrapper, tokenizer, demonstration='',
-                    use_cache=args.config['use_cache'], return_logits=args.config['return_logits']
-                    )
+                    use_cache=args.config['use_cache'],
+                    return_logits=args.config['return_logits']
+                )
+            m1_end = time.time()
+            result_dict['test_result']['ICLTV'].append(test_m1)
+            result_dict['time']['ICLTV'].append(m1_end - m1_start)
+            print(f"Test ICL TV: {test_m1}\n")
 
-        i2cl_end = time.time()
-        result_dict['test_result']['i2cl_train'].append(test_i2cl)
-        result_dict['time']['i2cl_train'].append(i2cl_end - i2cl_start)
-        print(f"Test I2CL_train: {test_i2cl}\n")
-
-        if args.config.get('return_logits', False) and test_few_logits is not None:
-            assert test_few_labels == test_i2cl_labels, "Label mismatch between few-shot and I2CL results!"
-            mean_kl_i2cl = utils.compute_kl_divergence(
-                test_few_logits, test_i2cl_logits, is_qwen='Qwen' in args.model_name
-            )
-            print(f"KL divergence (Few-shot vs I2CL_train): {mean_kl_i2cl:.4f}")
-            kl_dict['i2cl_train'][args.run_name] = {
-                "mean_kl": mean_kl_i2cl
-            }
-        '''
-        ################## ICL task vector baseline ##################
-        print("Evaluating ICL TV baseline...")
-        m1_start = time.time()
-        all_latent_dicts = []
-        with torch.no_grad():
-            with base_wrapper.extract_latent():
-                demon_token = tokenizer(demon, return_tensors='pt').to(args.device)
-                _ = model(**demon_token)
-            all_latent_dicts.append(base_wrapper.latent_dict)
-            base_wrapper.reset_latent_dict()
-
-        context_vector_dict = base_wrapper.get_context_vector(all_latent_dicts, args.config)
-        del all_latent_dicts
-        best_layer = target_layer_selection(
-            args, base_wrapper, tokenizer, val_evaluator, context_vector_dict
-        )
-        result_dict['best_replace_layer']['ICLTV'].append(best_layer)
-
-        
-        with base_wrapper.replace_latent(context_vector_dict, [best_layer], args.config):
-            test_m1, test_m1_logits, test_m1_labels = test_evaluator.evaluate(
-                base_wrapper, tokenizer, demonstration='',
-                use_cache=args.config['use_cache'],
-                return_logits=args.config['return_logits']
-            )
-        m1_end = time.time()
-        result_dict['test_result']['ICLTV'].append(test_m1)
-        result_dict['time']['ICLTV'].append(m1_end - m1_start)
-        print(f"Test ICL TV: {test_m1}\n")
-
-        if args.config.get('return_logits', False) and test_few_logits is not None:
-            assert test_few_labels == test_m1_labels, "Label mismatch between few-shot and ICL TV results!"
-            mean_kl_m1 = utils.compute_kl_divergence(
-                test_few_logits, test_m1_logits, is_qwen='Qwen' in args.model_name
-            )
-            print(f"KL divergence (Few-shot vs ICL TV): {mean_kl_m1:.4f}")
-            kl_dict['ICLTV'][args.run_name] = {
-                "mean_kl": mean_kl_m1
-            }
+            if args.config.get('compute_kl_divergence', False) and test_few_logits is not None:
+                assert test_few_labels == test_m1_labels, "Label mismatch between few-shot and ICL TV results!"
+                mean_kl_m1 = utils.compute_kl_divergence(
+                    test_few_logits, test_m1_logits, is_qwen='Qwen' in args.model_name
+                )
+                print(f"KL divergence (Few-shot vs ICL TV): {mean_kl_m1:.4f}")
+                kl_dict['ICLTV'][args.run_name] = {
+                    "mean_kl": mean_kl_m1
+                }
 
         ################## FV baseline ##################
-        print("Evaluating FV baseline...")
-        fv_start = time.time()
-        dataset_fv = {}
-        fv_result_dict = {}
-        args.n_mean_activations_trials = config['n_mean_activations_trials']
-        args.n_top_heads = config['n_top_heads']
-        args.prefixes = config['prefixes']
-        args.separators = config['separators']
-        args.revision = config['revision']
+        if args.config['run_fv']:
+            print("Evaluating FV baseline...")
+            fv_start = time.time()
+            dataset_fv = {}
+            fv_result_dict = {}
+            args.n_mean_activations_trials = config['n_mean_activations_trials']
+            args.n_top_heads = config['n_top_heads']
+            args.prefixes = config['prefixes']
+            args.separators = config['separators']
+            args.revision = config['revision']
 
-        # TODO: model_config 체크
-        dataset_fv['train'] = convert_basetask_to_icldataset(train_dataset, demon_indices)
-        dataset_fv['validation'] = convert_basetask_to_icldataset(val_dataset)
-        dataset_fv['test'] = convert_basetask_to_icldataset(test_dataset)
+            # TODO: model_config 체크
+            dataset_fv['train'] = convert_basetask_to_icldataset(train_dataset, demon_indices)
+            dataset_fv['validation'] = convert_basetask_to_icldataset(val_dataset)
+            dataset_fv['test'] = convert_basetask_to_icldataset(test_dataset)
 
-        # 1. filter dataset to cases where model gets it correct
-        fs_results_validation = n_shot_eval_no_intervention(
-            dataset=dataset_fv, task_name=args.dataset_name, n_shots=args.shot_num, model=model,
-            model_config=model_config, tokenizer=tokenizer, compute_ppl=True, test_split='validation',
-            prefixes=args.prefixes, separators=args.separators
-            )
-        filter_set_validation = np.where(np.array(fs_results_validation['clean_rank_list']) == 0)[0]
-        utils.set_seed(args.config['seed']+run_id)
-        fs_results = n_shot_eval_no_intervention(
-            dataset=dataset_fv, task_name=args.dataset_name, n_shots=args.shot_num, model=model,
-            model_config=model_config, tokenizer=tokenizer, compute_ppl=True, prefixes=args.prefixes,
-            separators=args.separators
-            )
-        filter_set = np.where(np.array(fs_results['clean_rank_list']) == 0)[0]
+            # 1. filter dataset to cases where model gets it correct
+            fs_results_validation = n_shot_eval_no_intervention(
+                dataset=dataset_fv, task_name=args.dataset_name, n_shots=args.shot_num, model=model,
+                model_config=model_config, tokenizer=tokenizer, compute_ppl=True, test_split='validation',
+                prefixes=args.prefixes, separators=args.separators
+                )
+            filter_set_validation = np.where(np.array(fs_results_validation['clean_rank_list']) == 0)[0]
+            utils.set_seed(args.config['seed']+run_id)
+            fs_results = n_shot_eval_no_intervention(
+                dataset=dataset_fv, task_name=args.dataset_name, n_shots=args.shot_num, model=model,
+                model_config=model_config, tokenizer=tokenizer, compute_ppl=True, prefixes=args.prefixes,
+                separators=args.separators
+                )
+            filter_set = np.where(np.array(fs_results['clean_rank_list']) == 0)[0]
 
-        # 2. compute mean_head_activations
-        utils.set_seed(args.config['seed']+run_id)
-        class_num = train_dataset.class_num
-        mean_activations = get_mean_head_activations(
-            dataset_fv, model=model, model_config=model_config, tokenizer=tokenizer,
-            n_icl_examples=args.shot_num // class_num,
-            N_TRIALS=args.n_mean_activations_trials, prefixes=args.prefixes, separators=args.separators,
-            filter_set=filter_set_validation
-            )
-        args.mean_activations_path = f'{args.save_dir}/{args.dataset_name}_mean_head_activations_{run_id}run.pt'
-        #torch.save(mean_activations, args.mean_activations_path)
+            # 2. compute mean_head_activations
+            utils.set_seed(args.config['seed']+run_id)
+            mean_activations = get_mean_head_activations(
+                dataset_fv, model=model, model_config=model_config, tokenizer=tokenizer,
+                n_icl_examples=args.shot_num,
+                N_TRIALS=args.n_mean_activations_trials, prefixes=args.prefixes, separators=args.separators,
+                filter_set=filter_set_validation
+                )
+            args.mean_activations_path = f'{args.save_dir}/{args.dataset_name}_mean_head_activations_{run_id}run.pt'
+            #torch.save(mean_activations, args.mean_activations_path)
 
-        # 3. load or re-compute indirect_effect values
-        ## TODO : if not using universal_set
-        fv, top_heads = compute_universal_function_vector(
-            mean_activations, model, model_config=model_config, n_top_heads=args.n_top_heads
-            )
+            # 3. load or re-compute indirect_effect values
+            if config['universal_fv'] == False:
+                fv, top_heads = compute_function_vector(
+                    mean_activations, model, model_config=model_config, n_top_heads=args.n_top_heads
+                    )
+            else:
+                fv, top_heads = compute_universal_function_vector(
+                    mean_activations, model, model_config=model_config, n_top_heads=args.n_top_heads
+                    )
 
-        
-        # 4. evaluate FV
-        if config['edit_layer'] == -2:
-            if 'Qwen2.5-7B' in args.model_name:
-                eval_edit_layer = 9
-            elif 'Llama-3.1-8B' in args.model_name:
-                eval_edit_layer = 11
-            else: # in case for other model
-                eval_edit_layer = model_config.fv['n_layers']//3 
+            # 4. evaluate FV
+            if config['choose_layer'] == False:
+                if 'Qwen2.5-7B' in args.model_name:
+                    eval_edit_layer = 9
+                elif 'Llama-3.1-8B' in args.model_name:
+                    eval_edit_layer = 11
+                else: # in case for other model
+                    eval_edit_layer = model_config.fv['n_layers']//3 
+            else:
+                eval_edit_layer = target_layer_selection(
+                    args, base_wrapper, tokenizer, val_evaluator, tv_type = "function_vector",
+                    context_vector = fv, model_config=model_config
+                )
 
-        utils.set_seed(args.config['seed'])
-        fv_results = {}
-        fv_logits = {}
-        fv_labels = {}
-        if isinstance(eval_edit_layer, int):
-            fv_results, test_fv_logits, fv_answer_labels = test_evaluator.evaluate(
-                model_wrapper=base_wrapper, tokenizer=tokenizer,
-                fv_vector=fv, fv_edit_layer=eval_edit_layer,model_config=model_config,
-                return_logits=args.config['return_logits']
-            )
-        else:
-            raise ValueError("Not allowed to sweep layers in this experiment")
+            utils.set_seed(args.config['seed'])
+            fv_results = {}
+            fv_logits = {}
+            fv_labels = {}
+            if isinstance(eval_edit_layer, int):
+                fv_results, test_fv_logits, fv_answer_labels = test_evaluator.evaluate(
+                    model_wrapper=base_wrapper, tokenizer=tokenizer,
+                    fv_vector=fv, edit_layer=eval_edit_layer,model_config=model_config,
+                    return_logits=args.config['return_logits']
+                )
+            else:
+                raise ValueError("Not allowed to sweep layers in this experiment")
 
-        fv_end = time.time()
-        result_dict['test_result']['fv'].append(fv_results)
-        result_dict['best_replace_layer']['fv'].append(eval_edit_layer)
-        result_dict['time']['fv'].append(fv_end - fv_start)
-        print(f"Test FV: {fv_results}\n")
+            fv_end = time.time()
+            result_dict['test_result']['fv'].append(fv_results)
+            result_dict['best_replace_layer']['fv'].append(eval_edit_layer)
+            result_dict['time']['fv'].append(fv_end - fv_start)
+            print(f"Test FV: {fv_results}\n")
 
-        if args.config.get('return_logits', False) and test_few_logits is not None:
-            assert test_few_labels == fv_answer_labels, "Label mismatch between few-shot and FV results!"
-            mean_kl_fv = utils.compute_kl_divergence(
-                test_few_logits, test_fv_logits, is_qwen='Qwen' in args.model_name
-            )
-            print(f"KL divergence (Few-shot vs FV): {mean_kl_fv:.4f}")
-            kl_dict['fv'][args.run_name] = {"mean_kl": mean_kl_fv}
+            if args.config.get('compute_kl_divergence', False) and test_few_logits is not None:
+                assert test_few_labels == fv_answer_labels, "Label mismatch between few-shot and FV results!"
+                mean_kl_fv = utils.compute_kl_divergence(
+                    test_few_logits, test_fv_logits, is_qwen='Qwen' in args.model_name
+                )
+                print(f"KL divergence (Few-shot vs FV): {mean_kl_fv:.4f}")
+                kl_dict['fv'][args.run_name] = {"mean_kl": mean_kl_fv}
 
-        print("Evaluating State Vector baseline...")
-        sv_start = time.time()
-            
-        _evaluator = Evaluator(model_path = args.model_name, model=model, tokenizer=tokenizer, devices="0")
-        svevaluator = ICLVectorEvaluator(metric, _evaluator)  
-        dev_data, dummy_test, valid_data, test_data = utils.convert_to_svdataset(split_demon, train_dataset, demon_indices, val_dataset, test_dataset, tokenizer, run_id, args)
-        dummy_test = dummy_test[0] # TODO: 1 train query setting check
-        
-        iv_result = {}
-
-        for i in range(len(test_data)):
-            test_data[i]['demon'] = []
-
-        acc, _ = svevaluator.single_ICL_test(test_data, format_dict=args.format_dict)
-        print("ZS acc : ", acc)
-
-        for i in range(len(test_data)):
-            test_data[i]['demon'] = dev_data
-        acc, _ = svevaluator.single_ICL_test(test_data, format_dict=args.format_dict)
-        print('ICL baseline acc : ', acc)
-        print()
-        
-        nshot, fshot = ('zs', False)
-            
-        run_name = f"{nshot}_raw_layer{eval_edit_layer}"
-        #optimizer_weight = [[1, 2, 4, 8, 16, 0]]
-        #optimizer_config = {"fix-one-step": {"lr": [1], "weight": optimizer_weight}}
-        optimizer_config = {"fixed": {"beta": [1, 1, 1, 1, 1, 1, 1]}}
-        label_info = train_dataset.get_dmonstration_template()['options']
-        test_sv, test_sv_logits, test_sv_labels, t = svevaluator.single_atv_test(dummy_queries=[valid_data[0]],
-                                                dev_data=[dev_data],
-                                                test_data=test_data, class_texts = label_info,
-                                                layer_indices=list(range(eval_edit_layer + 1)),
-                                                optimizer_config = optimizer_config,
-                                                fs_eval=fshot,
-                                                shuffle_labels=False,
-                                                intervention_mode='add#0#1',
-                                                add_to='atten',
-                                                question_prompt=args.config['question_prompt'],
-                                                format_dict=args.format_dict,
-                                                return_logits=args.config['return_logits'])
-
-        sv_end = time.time()
-        result_dict['test_result']['state vector'].append(test_sv)
-        result_dict['time']['state vector'].append(sv_end - sv_start)
-        print(f"Test State Vector: {test_sv}\n")
-
-        if args.config.get('compute_kl_divergence', False) and test_few_logits is not None:
-            assert test_few_labels == test_sv_labels, "Label mismatch between few-shot and FV results!"
-            mean_kl_sv = utils.compute_kl_divergence(
-                test_few_logits, test_sv_logits, is_qwen='Qwen' in args.model_name
-            )
-            print(f"KL divergence (Few-shot vs SV): {mean_kl_sv:.4f}")
-            kl_dict['state vector'][args.run_name] = {
-                    "mean_kl": mean_kl_sv
-                }
-        
-        with open(os.path.join(args.save_dir, 'result_dict.json'), 'w') as f:
-            json.dump(result_dict, f, indent=4)
-        if kl_dict['state vector']:
-            with open(os.path.join(args.save_dir, 'kl_divergence.json'), 'w') as f:
-                json.dump(kl_dict, f, indent=4)
+        ################## SV baseline ##################
+        if args.config['run_sv']:
+            print("Evaluating State Vector baseline...")
+            sv_start = time.time()
                 
-        del svevaluator, mean_kl_sv, test_sv_logits, _evaluator
+            _evaluator = SVEvaluator(model_path = args.model_name, model=model, tokenizer=tokenizer, devices="0")
+            svevaluator = ICLVectorEvaluator(metric, _evaluator)  
+            dev_data, dummy_test, valid_data, test_data = utils.convert_to_svdataset(split_demon, train_dataset, demon_indices, val_dataset, test_dataset, tokenizer, run_id, args)
+            dummy_test = dummy_test[0] # TODO: 1 train query setting check
+            
+            iv_result = {}
+
+            for i in range(len(test_data)):
+                test_data[i]['demon'] = []
+
+            for i in range(len(test_data)):
+                test_data[i]['demon'] = dev_data
+            
+            nshot, fshot = ('zs', False)
+                
+            run_name = f"{nshot}_raw_layer{eval_edit_layer}"
+            #optimizer_weight = [[1, 2, 4, 8, 16, 0]]
+            #optimizer_config = {"fix-one-step": {"lr": [1], "weight": optimizer_weight}}
+            optimizer_config = {"fixed": {"beta": [1, 1, 1, 1, 1, 1, 1]}}
+            label_info = train_dataset.get_dmonstration_template()['options']
+            test_sv, test_sv_logits, test_sv_labels, t = svevaluator.single_atv_test(dummy_queries=[valid_data[0]],
+                                                    dev_data=[dev_data],
+                                                    test_data=test_data, class_texts = label_info,
+                                                    layer_indices=list(range(eval_edit_layer + 1)),
+                                                    optimizer_config = optimizer_config,
+                                                    fs_eval=fshot,
+                                                    shuffle_labels=False,
+                                                    intervention_mode='add#0#1',
+                                                    add_to='atten',
+                                                    question_prompt=args.config['question_prompt'],
+                                                    format_dict=args.format_dict,
+                                                    return_logits=args.config['return_logits'])
+
+            sv_end = time.time()
+            result_dict['test_result']['state vector'].append(test_sv)
+            result_dict['time']['state vector'].append(sv_end - sv_start)
+            print(f"Test State Vector: {test_sv}\n")
+
+            if args.config.get('compute_kl_divergence', False) and test_few_logits is not None:
+                assert test_few_labels == test_sv_labels, "Label mismatch between few-shot and FV results!"
+                mean_kl_sv = utils.compute_kl_divergence(
+                    test_few_logits, test_sv_logits, is_qwen='Qwen' in args.model_name
+                )
+                print(f"KL divergence (Few-shot vs SV): {mean_kl_sv:.4f}")
+                kl_dict['state vector'][args.run_name] = {
+                        "mean_kl": mean_kl_sv
+                    }
+            
+            with open(os.path.join(args.save_dir, 'result_dict.json'), 'w') as f:
+                json.dump(result_dict, f, indent=4)
+            if kl_dict['state vector']:
+                with open(os.path.join(args.save_dir, 'kl_divergence.json'), 'w') as f:
+                    json.dump(kl_dict, f, indent=4)
+                    
+            del svevaluator, mean_kl_sv, test_sv_logits, _evaluator
 
         m2_test_dict = {}
         m2a_test_dict ={}
@@ -626,7 +636,7 @@ def main(args):
 
     print(f"\n{'=' * 60}")
     print("Baseline suite completed!")
-    print(f"Results saved to: {args.save_dir}")
+    print(f"Results saved to: {args.save_dir}, time : {time.time()}")
     print(f"{'=' * 60}\n")
 
 # TODO
@@ -691,7 +701,8 @@ def get_args():
     parser.add_argument("--cali_example_method", type=str, default="normal")
 
     # Function Vector baseline
-    parser.add_argument("--edit_layer", type=int, default=-2)
+    parser.add_argument("--choose_layer", type=bool, default=False)
+    parser.add_argument("--universal_fv", type=bool, default=True)
     parser.add_argument("--n_top_heads", type=int, default=10)
     parser.add_argument("--n_mean_activations_trials", type=int, default=20)
 

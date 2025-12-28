@@ -8,6 +8,7 @@ import utils
 import pandas as pd
 
 from fv_utils.intervention_utils import *
+from sv_utils.TVframework import SVEvaluator
 
 class Evaluator(nn.Module):
 
@@ -17,19 +18,19 @@ class Evaluator(nn.Module):
         self.batch_size = batch_size
 
     def evaluate(self, model_wrapper, tokenizer, demonstration='', use_cache=False, return_logits=False, 
-                 return_head_outputs=False, fv_vector=None, fv_edit_layer=None, model_config=None,
+                 return_head_outputs=False, fv_vector=None, sv_vector=None, edit_layer=None, model_config=None,
                  return_q_states=False): 
 
         return self._evaluate_text_classification_batch(
             model_wrapper, tokenizer,
             demonstration, use_cache=use_cache, return_logits=return_logits,
-            return_head_outputs=return_head_outputs, fv_vector=fv_vector, fv_edit_layer=fv_edit_layer, model_config=model_config,
+            return_head_outputs=return_head_outputs, fv_vector=fv_vector, sv_vector=sv_vector, edit_layer=edit_layer, model_config=model_config,
             return_q_states=return_q_states
         )  
         
     def _evaluate_text_classification_batch(self, model_wrapper, tokenizer,
                                             demonstration, use_cache=False, return_logits=False, 
-                                            fv_vector=None, fv_edit_layer=None, model_config=None,
+                                            fv_vector=None, sv_vector=None, edit_layer=None, model_config=None,
                                             return_head_outputs=False, return_q_states=False):
 
         model = model_wrapper.model
@@ -46,14 +47,33 @@ class Evaluator(nn.Module):
         all_semantic_preds = []
         all_space_logits = []
         all_semantic_logits = []
+        label_info = []
+        
+        if sv_vector is not None:
+            svevaluator = SVEvaluator(model_path = model.config._name_or_path, model=model, tokenizer=tokenizer, devices=model.device)
+            layer_indices = list(sv_vector.keys())
 
-        for label_text in ans_txt_list:
+            config = {"intervention_mode": 'add#0#1'}
+            sv_vector = {svevaluator.num2attn(k): v for k, v in sv_vector.items()}
+            layer_hook_names = [svevaluator.num2attn(x) for x in layer_indices]
+
+        
+        
+        for lid, label_text in enumerate(ans_txt_list):
             toks_space = tokenizer.encode(" " + label_text, add_special_tokens=False)
             space_label_tokens.append(toks_space[0])
 
             toks_nospace = tokenizer.encode(label_text, add_special_tokens=False)
             semantic_label_tokens.append(toks_nospace[0])
             nospace_token_lists.append(toks_nospace)  
+            label_info.append({
+                    "label_id": lid,
+                    "text": label_text,
+                    "space_token_ids": toks_space,
+                    "semantic_token_ids": toks_nospace,
+                    "space_first": toks_space[0],
+                    "semantic_first": toks_nospace[0],
+                })
 
         # ======================================================
         # 2. Prepare data
@@ -97,18 +117,31 @@ class Evaluator(nn.Module):
             gv.ATTN_MASK_START = torch.zeros_like(pred_loc)
             gv.ATTN_MASK_END = pred_loc
                         
-            if fv_vector is None:
-                output = model(input_ids=input_ids,attention_mask=attn_mask,
-                    use_cache=False,return_head_outputs=return_head_outputs,return_q_states=return_q_states)
-            else:
+            if fv_vector is not None:
                 intervention_idx = -1
-                intervention_fn = add_function_vector(fv_edit_layer, fv_vector.reshape(1, model_config.fv['resid_dim']), model.device, idx=intervention_idx)
+                intervention_fn = add_function_vector(edit_layer, fv_vector.reshape(1, model_config.fv['resid_dim']), model.device, idx=intervention_idx)
                 with TraceDict(model, layers=model_config.fv['layer_hook_names'], edit_output=intervention_fn) as td:    
                     output = model(input_ids=input_ids,attention_mask=attn_mask,
                     use_cache=False,return_head_outputs=return_head_outputs,return_q_states=return_q_states)
-            logits = output.logits
+                logits = output.logits
+                
+            elif sv_vector is not None:                
+                # using pred_loc is valid only for zero-shot ICL
+                sv_indices = torch.tensor([pred_loc.max().item()], device=model.device, dtype=torch.long)
+                intervention_fn = svevaluator.intervention_function(config, layer_hook_names, sv_indices, sv_vector, model.device, svevaluator.forward_model_dict)
+                
+                with torch.no_grad():
+                    with TraceDict(model, layers=layer_hook_names, clone=False, detach=False, retain_input=False, retain_output=False,
+                        edit_output=intervention_fn) as activations_td:
+                        logits = model(input_ids.to(model.device)).logits
+                        
+            else:
+                output = model(input_ids=input_ids,attention_mask=attn_mask,
+                    use_cache=False,return_head_outputs=return_head_outputs,return_q_states=return_q_states)
+                logits = output.logits
+
             base_logits = logits[torch.arange(logits.size(0)), pred_loc]
-            log_probs = F.log_softmax(base_logits, dim=-1)   # [ADD]
+            log_probs = F.log_softmax(base_logits, dim=-1) 
 
             # (A) space-token
             space_preds = log_probs[:, space_label_tokens].argmax(dim=-1)
@@ -127,43 +160,17 @@ class Evaluator(nn.Module):
             # Debug: first batch only
             # -------------------------------
             if batch_idx == 0:
-                full_ids = tokenizer.encode(cur_inputs[0], add_special_tokens=False)
-                print("\n=== FULL TOKENIZATION (tail) ===")
-                print(full_ids[-50:])
-                print(tokenizer.convert_ids_to_tokens(full_ids[-50:]))
-                print("\n=== Label strings ===")
-                print(ans_txt_list)
-
-                loc = pred_loc[0].item()
-                print(pred_loc)
-                print("pred_loc context:",
-                      tokenizer.decode(input_ids[0][loc-10:loc+10]))
-
                 print("\n=== Label tokenization check ===")
                 for lid, text in enumerate(ans_txt_list):
                     print(f"[{lid}] {text}")
                     print("  space   :", tokenizer.encode(" " + text, add_special_tokens=False))
                     print("  nospace :", tokenizer.encode(text, add_special_tokens=False))
                     
-                print("\n=== Prediction ↔ Label meaning check (first batch) ===")
-                for b in range(min(5, len(cur_inputs))):
-                    gt = all_labels[i + b]
-
-                    sp = space_preds[b].item()
-                    se = semantic_preds[b].item()
-
-                    print(f"\n[Sample {b}]")
-                    print("GT label id :", gt, "->", ans_txt_list[gt])
-                    print("space pred :", sp, "->", ans_txt_list[sp])
-                    print("first pred :", se, "->", ans_txt_list[se])
-
+                print("\n=== [DEBUG] input ===")
+                print(cur_inputs[0])
                 # 1. full prompt tokenization
                 full_ids = tokenizer.encode(cur_inputs[0], add_special_tokens=False)
                 full_toks = tokenizer.convert_ids_to_tokens(full_ids)
-
-                print("\n=== Label token sanity check ===")
-                print(f"{'label':<12} {'semantic':>10} {'tok':>12} | {'space':>10} {'tok':>12} | {'ICL':>10} {'tok':>12}")
-                print("-" * 80)
 
                 for label in ans_txt_list:
                     # semantic
@@ -178,8 +185,6 @@ class Evaluator(nn.Module):
                     # ICL
                     icl_id = full_ids[-1]
                     icl_tok = tokenizer.convert_ids_to_tokens([icl_id])[0]
-
-                    print(f"{label:<12} {sem_id:>10} {sem_tok:>12} | {sp_id:>10} {sp_tok:>12} | {icl_id:>10} {icl_tok:>12}")
 
             del logits
             torch.cuda.empty_cache()
@@ -212,15 +217,29 @@ class Evaluator(nn.Module):
         # ======================================================
         # 7. ORIGINAL RETURN (UNCHANGED)
         # ======================================================
-        if "llama" in model.config._name_or_path.lower():
-            pred_strategy = "space"
-            final_preds = all_space_preds
-            final_logits = all_space_logits
-        else:
+        if "llama-2" in model.config._name_or_path.lower():
             pred_strategy = "first semantic"
             final_preds = all_semantic_preds
             final_logits = all_semantic_logits
-        
+            print("[Double Check] used label")
+            for info in label_info:
+                tok = tokenizer.convert_ids_to_tokens([info["semantic_first"]])[0]
+                print(
+                    f"[{info['label_id']}] {info['text']:<10} | "
+                    f"token_id = {info['semantic_first']:<6} | token = {tok}"
+                )
+        else:
+            pred_strategy = "space"
+            final_preds = all_space_preds
+            final_logits = all_space_logits
+            print("[Double Check] used label")
+            for info in label_info:
+                tok = tokenizer.convert_ids_to_tokens([info["space_first"]])[0]
+                print(
+                    f"[{info['label_id']}] {info['text']:<10} | "
+                    f"token_id = {info['space_first']:<6} | token = {tok}"
+                )
+                        
         del all_space_preds, all_semantic_preds, all_space_logits, all_semantic_logits
         
         num_classes = self.dataset.class_num
