@@ -7,7 +7,7 @@ import pandas as pd
 
 def main(json_path, dataset):
 
-    csv_path = f"{json_path}/{dataset}_result_exp1119.csv"
+    csv_path = f"{json_path}/{dataset}_result_exp1228.csv"
 
     # Load result_dict.json
     with open(f"{json_path}/result_dict.json", "r") as f:
@@ -78,7 +78,7 @@ def main(json_path, dataset):
     # ------------------------------------------------------
     # i2cl_default / i2cl_train / ICLTV
     # ------------------------------------------------------
-    for method in ["i2cl_default", "i2cl_train", "ICLTV"]:
+    for method in ["i2cl_default", "i2cl_train", "ICLTV","state vector"]:
         if method not in test_result:
             continue
 
@@ -309,9 +309,7 @@ def main(json_path, dataset):
 
     print("\nCSV saved:", csv_path)
 
-
-
 if __name__ == "__main__":
-    for d in ['sst5','mr','trec','sst2']:
-        path = f"/home/jiii111/ICLTV_exp1/I2CL/exps/baseline_all_test_15/Qwen/Qwen2.5-7B/{d}"
+    for d in ['sst5']: #,'agnews','dbpedia','mr','sst2','sst5','trec','subj']: 
+        path = f"/home/jiii111/ICLTV/I2CL/exps/REEXP_1226_2/Qwen/Qwen3-8B/{d}"
         main(path, d)

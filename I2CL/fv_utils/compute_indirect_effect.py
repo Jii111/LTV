@@ -5,10 +5,10 @@ import argparse
 from baukit import TraceDict
 
 # Include prompt creation helper functions
-from utils.prompt_utils import *
-from utils.intervention_utils import *
-from utils.model_utils import *
-from utils.extract_utils import *
+from fv_utils.prompt_utils import *
+from fv_utils.intervention_utils import *
+from fv_utils.model_utils import *
+from fv_utils.extract_utils import *
 
 
 def activation_replacement_per_class_intervention(prompt_data, avg_activations, dummy_labels, model, model_config, tokenizer, last_token_only=True):
@@ -42,7 +42,11 @@ def activation_replacement_per_class_intervention(prompt_data, avg_activations, 
     sentences = [prompt_string]# * model.config.n_head # batch things by head
 
     # Figure out tokens of interest
-    target = [query_target_pair['output']]
+    if "llama-2" in model.config._name_or_path.lower():
+        target = [" " + query_target_pair['output']]
+    else:
+        target = [query_target_pair['output']]
+
     token_id_of_interest = get_answer_id(sentences[0], target[0], tokenizer)
     if isinstance(token_id_of_interest, list):
         token_id_of_interest = token_id_of_interest[:1]
@@ -52,7 +56,8 @@ def activation_replacement_per_class_intervention(prompt_data, avg_activations, 
     # Speed up computation by only computing causal effect at last token
     if last_token_only:
         token_classes = ['query_predictive']
-        token_classes_regex = ['query_predictive_token']
+        #token_classes_regex = ['query_predictive_token']
+        token_classes_regex = ['predictive_token','separator_token']
     # Compute causal effect for all token classes (instead of just last token)
     else:
         token_classes = ['demonstration', 'label', 'separator', 'predictive', 'structural','end_of_example', 
@@ -64,8 +69,11 @@ def activation_replacement_per_class_intervention(prompt_data, avg_activations, 
     indirect_effect_storage = torch.zeros(model_config['n_layers'], model_config['n_heads'],len(token_classes))
 
     # Clean Run of Baseline:
-    clean_output = model(**inputs).logits[:,-1,:]
+    clean_output = model(**inputs).logits[:,-1,:].float()
     clean_probs = torch.softmax(clean_output[0], dim=-1)
+
+    topk = torch.topk(clean_probs, k=10)
+    print([(tokenizer.decode(i), v.item()) for i, v in zip(topk.indices, topk.values)])
 
     # For every layer, head, token combination perform the replacement & track the change in meaningful tokens
     for layer in range(model_config['n_layers']):
@@ -81,11 +89,30 @@ def activation_replacement_per_class_intervention(prompt_data, avg_activations, 
                                                            model=model, model_config=model_config,
                                                            batched_input=False, idx_map=idx_map, last_token_only=last_token_only)
                 with TraceDict(model, layers=head_hook_layer, edit_output=intervention_fn) as td:                
-                    output = model(**inputs).logits[:,-1,:] # batch_size x n_tokens x vocab_size, only want last token prediction
+                    output = model(**inputs).logits[:,-1,:].float() # batch_size x n_tokens x vocab_size, only want last token prediction
                 
                 # TRACK probs of tokens of interest
                 intervention_probs = torch.softmax(output, dim=-1) # convert to probability distribution
                 indirect_effect_storage[layer,head_n,i] = (intervention_probs-clean_probs).index_select(1, torch.LongTensor(token_id_of_interest).to(device).squeeze()).squeeze()
+
+    print("[DEBUG_FV] token_id_of_interest:", token_id_of_interest, tokenizer.decode(token_id_of_interest))
+    print("[DEBUG_FV] class_token_inds:", class_token_inds[:10])
+    print("[DEBUG_FV] intervention_locations:", intervention_locations[:5])
+    print("[DEBUG_FV] prob diff max:", (intervention_probs-clean_probs).abs().max().item())
+    print()
+    # clean
+    topk_c = torch.topk(clean_probs, k=10)
+    print("CLEAN top10:", [(tokenizer.decode(i), v.item()) for i, v in zip(topk_c.indices, topk_c.values)])
+
+    # intervention
+    topk_i = torch.topk(intervention_probs[0], k=10)
+    print("INT top10:", [(tokenizer.decode(i), v.item()) for i, v in zip(topk_i.indices, topk_i.values)])
+
+    # diff top10
+    diff = (intervention_probs[0] - clean_probs[0]).abs()
+    topk_d = torch.topk(diff, k=10)
+    print("DIFF top10:", [(tokenizer.decode(i), v.item()) for i, v in zip(topk_d.indices, topk_d.values)])
+
 
     return indirect_effect_storage
 
@@ -111,17 +138,17 @@ def compute_indirect_effect(dataset, mean_activations, model, model_config, toke
     n_test_examples = 1
 
     if prefixes is not None and separators is not None:
-        dummy_gt_labels = get_dummy_token_labels(n_shots, tokenizer=tokenizer, prefixes=prefixes, separators=separators, model_config=model_config)
+        dummy_gt_labels = get_dummy_token_labels(n_shots, tokenizer=tokenizer, prefixes=prefixes, separators=separators, model_config=model_config.fv)
     else:
-        dummy_gt_labels = get_dummy_token_labels(n_shots, tokenizer=tokenizer, model_config=model_config)
+        dummy_gt_labels = get_dummy_token_labels(n_shots, tokenizer=tokenizer, model_config=model_config.fv)
 
     # If the model already prepends a bos token by default, we don't want to add one
-    prepend_bos = False if model_config['prepend_bos'] else True
+    prepend_bos = False if model_config.fv['prepend_bos'] else True
 
     if last_token_only:
-        indirect_effect = torch.zeros(n_trials,model_config['n_layers'], model_config['n_heads'])
+        indirect_effect = torch.zeros(n_trials,model_config.fv['n_layers'], model_config.fv['n_heads'])
     else:
-        indirect_effect = torch.zeros(n_trials,model_config['n_layers'], model_config['n_heads'],10) # have 10 classes of tokens
+        indirect_effect = torch.zeros(n_trials,model_config.fv['n_layers'], model_config.fv['n_heads'],10) # have 10 classes of tokens
 
     if filter_set is None:
         filter_set = np.arange(len(dataset['validation']))
@@ -140,7 +167,7 @@ def compute_indirect_effect(dataset, mean_activations, model, model_config, toke
         ind_effects = activation_replacement_per_class_intervention(prompt_data=prompt_data_random, 
                                                                     avg_activations = mean_activations, 
                                                                     dummy_labels=dummy_gt_labels, 
-                                                                    model=model, model_config=model_config, tokenizer=tokenizer, 
+                                                                    model=model, model_config=model_config.fv, tokenizer=tokenizer, 
                                                                     last_token_only=last_token_only)
         indirect_effect[i] = ind_effects.squeeze()
 

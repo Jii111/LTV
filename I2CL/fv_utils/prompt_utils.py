@@ -236,7 +236,9 @@ def get_dummy_token_labels(n_icl_examples, tokenizer, model_config, prefixes=Non
     final_token_labels: list of tuples containing a token's index and label name [(int, str), ... ]
     """
     # If the model already prepends a bos token by default, we don't want to add one to our prompts
-    prepend_bos =  False if model_config['prepend_bos'] else True
+    prepend_bos = False if model_config.get("prepend_bos") else True
+    #prepend_bos = False if model_config.model_prepend_bos else True
+
 
     if prefixes is not None and separators is not None:
         dummy_prompt_data = word_pairs_to_prompt_data({'input': ['a']*n_icl_examples, 'output':['a']*n_icl_examples}, 
@@ -247,6 +249,7 @@ def get_dummy_token_labels(n_icl_examples, tokenizer, model_config, prefixes=Non
                                                   query_target_pair={'input':['a'], 'output':['a']}, prepend_bos_token=prepend_bos)
     final_token_labels, _ = get_token_meta_labels(dummy_prompt_data,tokenizer, prepend_bos=model_config['prepend_bos'])
     final_token_labels = [(x[0],x[-1]) for x in final_token_labels]
+    
     return final_token_labels
 
 def compute_duplicated_labels(token_labels, gt_labels):

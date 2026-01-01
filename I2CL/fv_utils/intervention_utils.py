@@ -34,12 +34,24 @@ def replace_activation_w_avg(layer_head_token_pairs, avg_activations, model, mod
     rep_act: A function that specifies how to replace activations with an average when given a hooked pytorch module.
     """
     edit_layers = [x[0] for x in layer_head_token_pairs]
+    
+    #print("=== DEBUG idx_map ===")
+    #print("len(idx_map):", len(idx_map))
+    #print("some idx_map items:", list(idx_map.items())[:10])
+    #print("max idx:", max(idx_map.values()))
+    #print("avg_activations.shape:", avg_activations.shape)
+
 
     def rep_act(output, layer_name, inputs):
         current_layer = int(layer_name.split('.')[2])
         if current_layer in edit_layers:    
             if isinstance(inputs, tuple):
                 inputs = inputs[0]
+            # Debugging
+            #print(f"Current Layer: {current_layer}")
+            #print(f"Model Config - n_heads: {model_config['n_heads']}, resid_dim: {model_config['resid_dim']}")
+            #print(f"Inputs Shape: {inputs.shape}")
+            #print(f"Avg Activations Shape: {avg_activations.shape}")
             
             # Determine shapes for intervention
             original_shape = inputs.shape
@@ -91,9 +103,6 @@ def replace_activation_w_avg(layer_head_token_pairs, avg_activations, model, mod
                 new_output = torch.matmul(inputs, out_proj.T)
 
             elif 'Qwen' in model_config['name_or_path']:
-                new_output = torch.matmul(inputs, out_proj.T)
-
-            elif 'Llama' in model_config['name_or_path']:
                 new_output = torch.matmul(inputs, out_proj.T)
 
             return new_output
@@ -224,10 +233,8 @@ def function_vector_intervention(sentence, target, edit_layer, function_vector, 
                                     max_new_tokens=MAX_NEW_TOKENS)
             intervention_output = tokenizer.decode(output.squeeze()[-MAX_NEW_TOKENS:])
         else:
-            intervention_output = model(**inputs).logits[:,-1,:] # batch_size x n_tokens x vocab_size, only want last token prediction
+            intervention_output = model(**inputs).logits # batch_size x n_tokens x vocab_size, only want last token prediction
     
-    diff = (intervention_output - clean_output).abs().max()
-    print(">> FV effect (logit max diff):", diff.item())
     
     fvi_output = (clean_output, intervention_output)
     if compute_nll:

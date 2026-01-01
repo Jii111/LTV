@@ -211,7 +211,7 @@ def sentence_eval(sentence, target, model, tokenizer, compute_nll=True, generate
 @torch.no_grad()
 def n_shot_eval(dataset, task_name, fv_vector, edit_layer: int, n_shots: int, model, model_config, tokenizer, shuffle_labels:bool=False,
                 filter_set=None, prefixes=None, separators=None, generate_str=False, pred_filepath=None,
-                test_type=None, metric="f1_score", return_logits=False):
+                test_type=None, metric="f1_score"):
     """
     Evaluate a model and FV intervention on the model using the provided ICL dataset.
 
@@ -236,42 +236,20 @@ def n_shot_eval(dataset, task_name, fv_vector, edit_layer: int, n_shots: int, mo
     """
     time1 = time.time()
     
-    clean_rank_list = []
-    intervention_rank_list = []
-
-    if generate_str:
-        clean_score_list = []
-        intervention_score_list = []
+    all_logits = []
+    answer_labels = []
 
     # If the model already prepends a bos token by default, we don't want to add one
     prepend_bos = False if model_config['prepend_bos'] else True
 
-    all_accs, all_preds, all_labels = [], [], []
-    all_pred_logits, all_inputs = [], []
-
     if filter_set is None:
         filter_set = np.arange(len(dataset[test_type]))
-
     if pred_filepath:
         pred_file = open(pred_filepath, 'w')
     else:
         pred_file = None        
 
-    ds = md.get_dataset(task_name, split="train")
-    ans_txt_list = ds.get_dmonstration_template()['options']
-    label_map = {}
-    interest_index = []
-    for label, ans_txt in enumerate(ans_txt_list):
-        if 'gpt' in tokenizer.__class__.__name__.lower() or 'qwen' in tokenizer.__class__.__name__.lower():
-            ans_txt = ' ' + ans_txt
-        toks = tokenizer.encode(ans_txt, add_special_tokens=False)
-        ans_tok = toks[0]
-        label_map[ans_tok] = label
-        interest_index.append(ans_tok)
-
     for j in tqdm(range(len(dataset[test_type])), total=len(dataset[test_type]), disable=True):
-        #if j not in filter_set: ### filterset에 있는 것들만 test하는 function vector 세팅 변경
-        
         if n_shots == 0:
             word_pairs = {'input':[], 'output':[]}
         else:
@@ -288,111 +266,18 @@ def n_shot_eval(dataset, task_name, fv_vector, edit_layer: int, n_shots: int, mo
         query, target = prompt_data['query_target']['input'], prompt_data['query_target']['output']
         query = query[0] if isinstance(query, list) else query
 
-        if generate_str:
-            target = [target] if not isinstance(target, list) else target
-        else:
-            target = target[0] if isinstance(target, list) else target
-        
+        target = target[0] if isinstance(target, list) else target
         sentence = [create_prompt(prompt_data)]
         
-        # Figure out token of interest        
-        target_token_id = get_answer_id(sentence[0], target, tokenizer)
-
-        if generate_str:
-            if metric == "f1_score":
-                metric_fn = f1_score
-            elif metric == "exact_match_score":
-                metric_fn = exact_match_score
-            elif metric == "first_word_score":
-                metric_fn = first_word_score
-            else:
-                raise ValueError(f"Unknown metric: {metric}. Recognized metrics: [\"f1_score\", \"exact_match_score\"]")
-            clean_output, intervention_output = function_vector_intervention(sentence, target = target, edit_layer = edit_layer, 
-                                                                            function_vector = fv_vector,
-                                                                            model=model, model_config=model_config, tokenizer=tokenizer, 
-                                                                            compute_nll=False, generate_str=generate_str)
-            clean_parsed_str, clean_score = parse_generation(clean_output, target, metric_fn)
-            intervention_parsed_str, intervention_score = parse_generation(intervention_output, target, metric_fn)
-            
-            clean_score_list.append(clean_score)
-            intervention_score_list.append(intervention_score)
-
-            if pred_file:
-                pred_file.write(f"{clean_parsed_str.strip()}\t|||\t{intervention_parsed_str}\n")
-
-        else:
-            clean_output, intervention_output = function_vector_intervention(sentence, target = [target], edit_layer = edit_layer, 
-                                                                              function_vector = fv_vector,
-                                                                              model=model, model_config=model_config, tokenizer=tokenizer, 
-                                                                              compute_nll=False)
+        inputs = tokenizer(sentence, return_tensors='pt').to(model.device)
+        intervention_idx = -1
+        intervention_fn = add_function_vector(edit_layer, fv_vector.reshape(1, model_config['resid_dim']), model.device, idx=intervention_idx)
+        with TraceDict(model, layers=model_config['layer_hook_names'], edit_output=intervention_fn) as td:    
+            intervention_output = model(**inputs).logits
         
-
-            clean_rank = compute_individual_token_rank(clean_output, target_token_id)
-            intervention_rank = compute_individual_token_rank(intervention_output, target_token_id)
-            
-            clean_rank_list.append(clean_rank)
-            intervention_rank_list.append(intervention_rank)        
+        answer_labels.append(word_pairs_test['output'])
         
-        if return_logits == True:
-            pred_label, true_label, logit = eval_i2clst(task_name, sentence, ans_txt_list = ans_txt_list, interest_index = interest_index, target = [target], model=model, tokenizer=tokenizer, fv_result = intervention_output)
-            all_preds.append(pred_label); all_labels.append(true_label)
-            all_pred_logits.append(logit)
-            all_inputs.append(sentence)
-
-    if generate_str:
-        results = {"clean_score": clean_score_list,
-                   "intervention_score": intervention_score_list} 
-    else:      
-        results = {"clean_topk": [(K, compute_top_k_accuracy(clean_rank_list, K)) for K in range(1,4)],
-                   "clean_rank_list": clean_rank_list,
-                   
-                   "intervention_topk": [(K, compute_top_k_accuracy(intervention_rank_list, K)) for K in range(1,4)],
-                   "intervention_rank_list":intervention_rank_list}
-    
-    if pred_filepath:
-        pred_file.close()
-
-    if return_logits == True:
-        if len(all_preds) > 0:
-            overall_acc = np.mean([int(p == l) for p, l in zip(all_preds, all_labels)])
-            
-            num_class=len(ans_txt_list)
-            TP = [0] * num_class
-            FP = [0] * num_class
-            FN = [0] * num_class
-
-            for pred_label, true_label in zip(all_preds, all_labels):
-                if pred_label == true_label:
-                    TP[true_label] += 1
-                else:
-                    FP[pred_label] += 1
-                    FN[true_label] += 1
-
-            precision = []
-            recall = []
-            f1_list = []
-            for i in range(num_class):
-                prec = TP[i] / (TP[i] + FP[i]) if TP[i] + FP[i] > 0 else 0
-                rec = TP[i] / (TP[i] + FN[i]) if TP[i] + FN[i] > 0 else 0
-                f1 = 2 * prec * rec / (prec + rec) if prec + rec > 0 else 0
-
-                precision.append(prec)
-                recall.append(rec)
-                f1_list.append(f1)
-
-            macro_f1 = sum(f1_list) / num_class
-
-            results["acc"] = {'acc': overall_acc, 'macro_f1': macro_f1}
-        else:
-            print("++ no accs")
-        
-        if isinstance(all_pred_logits, list):
-            all_pred_logits = torch.stack(all_pred_logits, dim=0)
-        
-        results["inputs"] = all_inputs
-        return results, all_pred_logits, all_labels
-    else:
-        return results
+    return intervention_output[:,-1,:], answer_labels
 
 
 # Evaluate few-shot dataset w/o intervention
@@ -430,7 +315,7 @@ def n_shot_eval_no_intervention(dataset, task_name, n_shots, model, model_config
         score_list = []
         
     # If the model already prepends a bos token by default, we don't want to add one
-    prepend_bos = False if model_config['prepend_bos'] else True
+    prepend_bos = False if model_config.fv['prepend_bos'] else True
 
 
     all_accs, all_preds, all_labels = [], [], []

@@ -129,6 +129,26 @@ class Evaluator(nn.Module):
                 # using pred_loc is valid only for zero-shot ICL
                 sv_indices = torch.tensor([pred_loc.max().item()], device=model.device, dtype=torch.long)
                 intervention_fn = svevaluator.intervention_function(config, layer_hook_names, sv_indices, sv_vector, model.device, svevaluator.forward_model_dict)
+                print("[i2cl DEBUG] intervention function", intervention_fn)
+                
+                print("===== TraceDict INPUT DEBUG =====")
+                print("[DEBUG] model type:", type(model))
+                print("[DEBUG] model device:", next(model.parameters()).device)
+
+                print("[DEBUG] layers (layer_hook_names):")
+                for i, l in enumerate(layer_hook_names):
+                    print(f"  {i}: {l}")
+
+                print("[DEBUG] clone:", False)
+                print("[DEBUG] detach:", False)
+                print("[DEBUG] retain_input:", False)
+                print("[DEBUG] retain_output:", False)
+
+                print("[DEBUG] edit_output fn:", intervention_fn)
+                print("[DEBUG] edit_output type:", type(intervention_fn))
+
+                print("=================================")
+
                 
                 with torch.no_grad():
                     with TraceDict(model, layers=layer_hook_names, clone=False, detach=False, retain_input=False, retain_output=False,
@@ -239,6 +259,8 @@ class Evaluator(nn.Module):
                     f"[{info['label_id']}] {info['text']:<10} | "
                     f"token_id = {info['space_first']:<6} | token = {tok}"
                 )
+            print("logits : ")
+            print(final_logits)
                         
         del all_space_preds, all_semantic_preds, all_space_logits, all_semantic_logits
         
