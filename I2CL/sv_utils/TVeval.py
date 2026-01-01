@@ -4,6 +4,7 @@ import os
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
 import numpy as np
+import pandas as pd
 import yaml
 import json
 import torch
@@ -11,7 +12,7 @@ import random
 import requests
 import argparse
 import time
-from sv_utils.TVframework import Evaluator
+from sv_utils.TVframework import SVEvaluator
 from typing import List
 from sv_utils.optimizer import get_optimizers, BaseOptimizer
 import my_datasets as md
@@ -57,6 +58,39 @@ class ICLVectorEvaluator():
         return self.avg_tv(task_vector_list)
 
     @torch.no_grad() 
+    def single_atv_extract(
+        self, dummy_queries, dev_data, class_texts,
+        layer_indices, optimizer_config=None, 
+        question_prompt='{input}', format_dict={}
+    ):
+        task_vector_list = []
+        for dummy_query, dev in zip(dummy_queries, dev_data):
+            demon = [
+                (question_prompt.format_map(ex), ex['output'])
+                for ex in dev
+            ]
+            dq = question_prompt.format_map(dummy_query)
+            tv, _ = self.evaluator.read_activation(dq, demon, layer_indices, format_dict)
+            task_vector_list.append(tv)
+
+        ori_task_vector = self.avg_tv(task_vector_list)
+
+        dev_task_vector = {k: [v[f'dev_{i}'] for i in range(len(v) - 1)]
+                        for k, v in ori_task_vector.items()}
+        test_task_vector = {k: v['test'] for k, v in ori_task_vector.items()}
+
+        if optimizer_config is None:
+            optimizers = [BaseOptimizer('none', None)]
+            return_none = True
+        else:
+            optimizers = get_optimizers(optimizer_config)
+            return_none = False
+            
+        for opt in optimizers:
+            task_vector = opt(dev_task_vector, test_task_vector)
+ 
+        return task_vector
+
     def single_atv_test(
         self, dummy_queries, dev_data, test_data, class_texts,
         layer_indices, optimizer_config=None, fs_eval=False,  shuffle_labels=False,
@@ -97,7 +131,7 @@ class ICLVectorEvaluator():
         if return_logits:
             class_token_ids = []
             for txt in class_texts:
-                if 'qwen' in self.tokenizer.__class__.__name__.lower():
+                if 'llama-2' in self.tokenizer.__class__.__name__.lower():
                     txt = ' ' + txt
                 ids = self.tokenizer.encode(txt, add_special_tokens=False)
                 class_token_ids.append(ids[0])
@@ -105,15 +139,24 @@ class ICLVectorEvaluator():
 
             all_pred_logits = []
 
+        sv_start = time.time()
         # ============================
         # 4. Main Evaluation Loop
         # ============================
         for opt in optimizers:
             task_vector = opt(dev_task_vector, test_task_vector)
+            for k, v in test_task_vector.items():
+                print(f"[SV DEBUG] layer {k} norm: {v.norm().item():.6f}")
+            
+            first_key = list(task_vector.keys())[0]
+            #print("[DEBUG] sv.originalst", task_vector[first_key].shape)
+            #print(task_vector)
+            #print()
             logit_list = []
 
             for d in test_data:
                 query = question_prompt.format_map(d)
+                #print("[DEBUG] test query : ", query)
 
                 # few-shot prompt 구성
                 demon = []; answer_labels = []
@@ -125,10 +168,10 @@ class ICLVectorEvaluator():
                         q = question_prompt.format_map(ex)
                         a = d['demon'][labels_map[idx]]['output']
                         demon.append((q, a))
-
                 # LM logits 얻기
                 logits = self.evaluator.write_activation(
                     query, task_vector, demon, intervention_mode, add_to, format_dict)
+                
                 logits = logits.detach().cpu()
                 logit_list.append(logits)
                 # ============================
@@ -140,14 +183,39 @@ class ICLVectorEvaluator():
 
                     class_logits = logits[class_token_ids]   # (K,)
                     probs = torch.softmax(class_logits, dim=-1)
+                    '''
+                    print("\n===== [DEBUG] STATE VECTOR EVALUATOR =====")
+                    print(f"Output logits shape: {logits.shape}")
+                    print("Prediction location: last token (implicit)")
+                    print("interest_index (class_token_ids):", class_token_ids)
+                    label_map = {tid: i for i, tid in enumerate(class_token_ids)}
+                    print("label_map (token_id -> class):", label_map)
+                    print("scores[0]:", probs)
+                    pred_cls = probs.argmax().item()
+                    print("pred:", pred_cls, f"({class_texts[pred_cls]})")
+                    
+                    print("\n[DEBUG] Class tokenization:")
+                    for cls in class_texts:
+                        toks = self.tokenizer.encode(cls, add_special_tokens=False)
+                        print(f"'{cls}' -> tokens={toks}, len={len(toks)}")
+
+                    print("[DEBUG] class logits : ")
+                    print(class_logits)
+                    print("=" * 60)
+                    '''
+                    # try sv projection
+                    #class_logits = logits[tv_indices]   # (K,)
+                    #probs = torch.softmax(class_logits, dim=-1)
 
                     all_pred_logits.append(probs.detach().cpu())
-
+        sv_end = time.time()
         # ============================
         # 5. accuracy + macro F1 (classification)
         # ============================
         all_pred_logits = torch.stack(all_pred_logits, dim=0)  # (N, K)
         pred_labels = all_pred_logits.argmax(dim=-1).tolist()
+        print("[DEBUG] pred value counts : ")
+        print(pd.Series(pred_labels).value_counts())
         answer_labels = [class_texts.index(d['output']) for d in test_data]
 
         TP = [0]*num_classes
@@ -182,7 +250,7 @@ class ICLVectorEvaluator():
             'macro_f1': sum(f1) / num_classes
         }
 
-        return metrics, all_pred_logits, answer_labels
+        return metrics, all_pred_logits, answer_labels, (sv_end - sv_start)
 
 
     def single_hid_test(self, dummy_queries, dev_data, test_data, layer_indices, fs_eval=False, shuffle_labels=False, intervention_mode='replace', question_prompt='{input}', format_dict={}):
@@ -453,6 +521,7 @@ class ICLVectorEvaluator():
         for d in valid_data:
             query = question_prompt.format_map(d)
             demon = []
+            print("d : ",d)
             labels_map = list(range(len(d['demon'])))
             random.shuffle(labels_map)
             for x, example in enumerate(d['demon']):
