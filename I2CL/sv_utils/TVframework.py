@@ -215,6 +215,23 @@ class SVEvaluator:
             write_hook_names = []
             write_hook_fn = None
         hook_names = list(set(read_hook_names) | set(write_hook_names))
+        '''
+        print("[SV DEBUG] input_ids")
+        print("  shape :", input_ids.shape)
+        print("  dtype :", input_ids.dtype)
+        print("  device:", input_ids.device)
+
+        print("[DEBUG] read_hook_names:", read_hook_names)
+        print("[DEBUG] write_hook_names:", write_hook_names)
+        print("[DEBUG] write_hook_fn:", write_hook_fn)
+        print("[DEBUG] write_hook_fn type:", type(write_hook_fn))
+        
+        print("[DEBUG] final hook_names (union):")
+        for i, h in enumerate(hook_names):
+            print(f"  {i}: {h}")
+        '''
+        
+        
         with torch.no_grad():
             with TraceDict(self.model, layers=hook_names, clone=False, detach=False, edit_output=write_hook_fn) as activations_td:
                 logits = self.model(input_ids.to(self.model.device)).logits.cpu()
@@ -265,12 +282,23 @@ class SVEvaluator:
                 for wp in write_pos
             ], dim=0
         )
+        '''
+        print()
+        print("[DEBUG] query", query)
+        print("[DEBUG] tv", task_vector)
+        print("[DEBUG] demon", demon_list)
+        print("[DEBUG] intervention_mode",intervention_mode)
+        print("[DEBUG] add_to", add_to)
+        print("[DEBUG] format_dict", format_dict)
+        ''' 
+                
         config = {"intervention_mode": intervention_mode}
         layer_indices = list(task_vector.keys())
         retain_input = return_mode != 'logits'
         if add_to == 'atten':
             layer_hook_names = [self.num2attn(x) for x in layer_indices]
             task_vector = {self.num2attn(k): v for k, v in task_vector.items()}
+            #print("[DEBUG] tv_indices : ", tv_indices)
             intervention_fn = self.intervention_function(config, layer_hook_names, tv_indices, task_vector, self.model.device, self.forward_model_dict)
             read_hook_names = [] if return_mode == 'logits' else layer_hook_names
             activation, logits = self.write_and_read_activation(
