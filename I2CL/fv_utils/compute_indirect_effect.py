@@ -42,7 +42,7 @@ def activation_replacement_per_class_intervention(prompt_data, avg_activations, 
     sentences = [prompt_string]# * model.config.n_head # batch things by head
 
     # Figure out tokens of interest
-    if "Llama-2" in model.config._name_or_path.lower():
+    if "llama-2" in model.config._name_or_path.lower():
         target = [" " + query_target_pair['output']]
     else:
         target = [query_target_pair['output']]
@@ -57,7 +57,7 @@ def activation_replacement_per_class_intervention(prompt_data, avg_activations, 
     if last_token_only:
         token_classes = ['query_predictive']
         #token_classes_regex = ['query_predictive_token']
-        token_classes_regex = ['predictive_token','separator_token'] #'query_predictive_token']
+        token_classes_regex = ['predictive_token','separator_token']
     # Compute causal effect for all token classes (instead of just last token)
     else:
         token_classes = ['demonstration', 'label', 'separator', 'predictive', 'structural','end_of_example', 
@@ -69,7 +69,7 @@ def activation_replacement_per_class_intervention(prompt_data, avg_activations, 
     indirect_effect_storage = torch.zeros(model_config['n_layers'], model_config['n_heads'],len(token_classes))
 
     # Clean Run of Baseline:
-    clean_output = model(**inputs).logits[:,-1,:].float() # 수정
+    clean_output = model(**inputs).logits[:,-1,:].float()
     clean_probs = torch.softmax(clean_output[0], dim=-1)
 
     topk = torch.topk(clean_probs, k=10)
@@ -89,20 +89,16 @@ def activation_replacement_per_class_intervention(prompt_data, avg_activations, 
                                                            model=model, model_config=model_config,
                                                            batched_input=False, idx_map=idx_map, last_token_only=last_token_only)
                 with TraceDict(model, layers=head_hook_layer, edit_output=intervention_fn) as td:                
-                    output = model(**inputs).logits[:,-1,:].float() # 수정 # batch_size x n_tokens x vocab_size, only want last token prediction
+                    output = model(**inputs).logits[:,-1,:].float() # batch_size x n_tokens x vocab_size, only want last token prediction
                 
                 # TRACK probs of tokens of interest
                 intervention_probs = torch.softmax(output, dim=-1) # convert to probability distribution
                 indirect_effect_storage[layer,head_n,i] = (intervention_probs-clean_probs).index_select(1, torch.LongTensor(token_id_of_interest).to(device).squeeze()).squeeze()
 
-    print("token_id_of_interest:", token_id_of_interest, tokenizer.decode(token_id_of_interest))
-    print("class_token_inds:", class_token_inds[:10])
-    print("intervention_locations:", intervention_locations[:5])
-    print("clean_probs max:", clean_probs.max().item())
-    print("intervention_probs max:", intervention_probs.max().item())
-    print("prob diff max:", (intervention_probs-clean_probs).abs().max().item())
-    print("model dtype:", next(model.parameters()).dtype)
-    print("avg dtype:", avg_activations.dtype)
+    print("[DEBUG_FV] token_id_of_interest:", token_id_of_interest, tokenizer.decode(token_id_of_interest))
+    print("[DEBUG_FV] class_token_inds:", class_token_inds[:10])
+    print("[DEBUG_FV] intervention_locations:", intervention_locations[:5])
+    print("[DEBUG_FV] prob diff max:", (intervention_probs-clean_probs).abs().max().item())
     print()
     # clean
     topk_c = torch.topk(clean_probs, k=10)
