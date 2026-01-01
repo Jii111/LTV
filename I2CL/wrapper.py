@@ -369,8 +369,6 @@ class ModelWrapper(nn.Module):
         self.linear_coef.requires_grad = False
         # set model to eval mode
         self.model.eval()
-        # plot loss curve and save it
-        utils.plot_loss_curve(loss_list, save_dir + f'/{run_name}_loss_curve.png')
 
     def softprompt(self, config, dataset, save_dir=None, run_name=None):
         pt_config = PromptTuningConfig(**config['pt_config'])

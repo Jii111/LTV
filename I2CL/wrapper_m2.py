@@ -206,6 +206,7 @@ class M2AdaptiveWrapper(M2Wrapper):
         layer_idx = self.num_layers - 1
         layer_module = self._get_nested_attr(self._get_arribute_path(layer_idx, "hidden"))
         handles = []
+        self.injected_deltas = []
 
         def hook(module, inputs, outputs):
             hidden = outputs[0] if isinstance(outputs, tuple) else outputs
@@ -215,6 +216,13 @@ class M2AdaptiveWrapper(M2Wrapper):
                 h_label = hidden[i, label_pos[i], :]
                 delta = torch.matmul(W, h_label)
                 hidden[i, label_pos[i], :] = h_label + delta
+                
+                self.injected_deltas.append({
+                    "batch_idx": i,
+                    "position": label_pos[i].item(),
+                    "delta": delta.detach().cpu(),
+                })
+
             if isinstance(outputs, tuple):
                 return (hidden,) + outputs[1:]
             return hidden

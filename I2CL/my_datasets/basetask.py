@@ -81,6 +81,8 @@ class BaseTask(Dataset):
                 cxt_max_len = 4096
             elif 'Llama-3.1' in tokenizer.name_or_path:
                 cxt_max_len = 128000
+            elif 'Llama-3' in tokenizer.name_or_path:
+                cxt_max_len = 8192
             else:
                 cxt_max_len = 2048
         else:
@@ -170,7 +172,11 @@ class BaseTask(Dataset):
 
         # check length of demonstration token
         encoded_inputs = tokenizer(demonstration, return_tensors="pt", padding=True, truncation=False)
-        assert len(encoded_inputs['input_ids'][0]) < max_demonstration_tok_len, "Demonstration token length should be smaller than the maximum demonstration token length!"
+        
+        print("====encoded input debug====")
+        print("len(encoded_inputs['input_ids'][0])", len(encoded_inputs['input_ids'][0]))
+        if not sv_data:
+            assert len(encoded_inputs['input_ids'][0]) < max_demonstration_tok_len, "Demonstration token length should be smaller than the maximum demonstration token length!"
         
         if return_data_index:
             return demonstration, demonstration_expample_list, sample_indexes

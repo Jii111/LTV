@@ -51,13 +51,15 @@ def init_exp_path(args, exp_name, separate_dataset=True):
 
 def load_model_tokenizer(model_name, device, output_hidden_states=True, load_in_8bit=False):
     # load tokenizer and model
-    tokenizer = AutoTokenizer.from_pretrained(model_name)
+    if 'Llama-2-7b' in model_name:
+        tokenizer = AutoTokenizer.from_pretrained(model_name,use_faset=False)
+    else:
+        tokenizer = AutoTokenizer.from_pretrained(model_name)
 
     if 'Qwen' in model_name:
         model = AutoModelForCausalLM.from_pretrained(
                 model_name,
-                torch_dtype=torch.bfloat16,
-                )
+                dtype=torch.bfloat16)
     else:
         model = AutoModelForCausalLM.from_pretrained(model_name,
                                                  output_hidden_states=output_hidden_states,
@@ -76,25 +78,8 @@ def load_model_tokenizer(model_name, device, output_hidden_states=True, load_in_
     tokenizer.pad_token = tokenizer.eos_token
     tokenizer.padding_side = 'left'
     
-    if "qwen" in model_name.lower():
-        MODEL_CONFIG = {
-            "n_heads": model.config.num_attention_heads,
-            "n_layers": model.config.num_hidden_layers,
-            "resid_dim": model.config.hidden_size,
-            "name_or_path": model.config._name_or_path,
-            "attn_hook_names": [
-                f"model.layers.{layer}.self_attn.o_proj"
-                for layer in range(model.config.num_hidden_layers)
-            ],
-            "layer_hook_names": [
-                f"model.layers.{layer}"
-                for layer in range(model.config.num_hidden_layers)
-            ],
-            "prepend_bos": True
-        }
-
-    elif "llama" in model_name.lower():
-        MODEL_CONFIG = {
+    if "qwen" in model_name.lower() or "llama" in model_name.lower():
+        fv_config = {
             "n_heads": model.config.num_attention_heads,
             "n_layers": model.config.num_hidden_layers,
             "resid_dim": model.config.hidden_size,
@@ -110,7 +95,7 @@ def load_model_tokenizer(model_name, device, output_hidden_states=True, load_in_
             "prepend_bos": True
         }
     else:
-        MODEL_CONFIG = {
+        fv_config = {
         "n_heads": model.config.num_attention_heads,
         "n_layers": model.config.num_hidden_layers,
         "resid_dim": model.config.hidden_size,
@@ -119,8 +104,9 @@ def load_model_tokenizer(model_name, device, output_hidden_states=True, load_in_
         "layer_hook_names": [],
         "prepend_bos": False
     }
+    config.fv = fv_config
     
-    return model, tokenizer, config, MODEL_CONFIG
+    return model, tokenizer, config
 
 
 def load_custom_model_tokenizer(model_name, device, output_hidden_states=True, load_in_8bit=False, method='M3'):
@@ -488,12 +474,49 @@ class TensorStrFinder:
             s_tensor in list_s_tensor]
         mask_tensor = functools.reduce(torch.logical_or, mask_tensor_list)
         return mask_tensor
-
+    
 def compute_kl_divergence(logits_p, logits_q, is_qwen=False):
     probs_p = F.softmax(logits_p, dim=-1)
     probs_q = F.softmax(logits_q, dim=-1)
-    kl = (probs_p * (probs_p.log() - probs_q.log())).sum(dim=-1)  # per-sample
+
+    support_mismatch = (probs_p > 0) & (probs_q == 0)
+    mismatch_count = support_mismatch.sum().item()
     
+    print()
+
+    if mismatch_count > 0:
+        bad_ids = torch.where(support_mismatch)[-1]
+        print("[DEBUG] support mismatch count:", mismatch_count)
+        print("[DEBUG] bad ids:", bad_ids.tolist())
+        idx = torch.where(support_mismatch)
+        test_idx = idx[0]
+        label_space_index = idx[1]
+
+        bad_logits_q = logits_q[test_idx, label_space_index]
+        bad_logits_p = logits_p[test_idx, label_space_index]    
+        
+    kl = probs_p * (torch.log(probs_p) - torch.log(probs_q))
+    kl[support_mismatch] = 0.0   # 문제되는 항만 제거
+    kl = kl.sum(dim=-1).float()
+    
+    
+    print()
+    print("[DEBUG] ALL KL values",kl)
+    print()
+    print("====> KL : ", kl.mean().item())
+    
+    q1, q2, q3 = torch.quantile(
+    kl,
+    torch.tensor([0.25, 0.5, 0.75], device=kl.device)
+)
+
+    print("[DEBUG] KL stats")
+    print("  min :", kl.min().item())
+    print("  Q1  :", q1.item())
+    print("  Q2  :", q2.item()) 
+    print("  Q3  :", q3.item())
+    print("  max :", kl.max().item())
+
     if is_qwen == True:
         return kl.float().mean().item()
     else:

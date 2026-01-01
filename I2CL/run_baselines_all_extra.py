@@ -16,6 +16,7 @@ import gc
 from sv_utils.TVeval import ICLVectorEvaluator
 from sv_utils.TVframework import SVEvaluator
 from sv_utils.utils import set_rand_seed
+from fv_utils.compute_indirect_effect import compute_indirect_effect
 
 import argparse
 import copy
@@ -35,7 +36,6 @@ from wrapper_m2 import M2AdaptiveWrapper, M2Wrapper
 
 task_queue = None
 
-
 def target_layer_selection(args, model_wrapper, tokenizer, evaluator, tv_type, context_vector, model_config=None):
     num_layers = model_wrapper.num_layers
     best_layer = 0
@@ -54,6 +54,12 @@ def target_layer_selection(args, model_wrapper, tokenizer, evaluator, tv_type, c
                     use_cache=args.config['use_cache'],
                     fv_vector=context_vector, edit_layer=layer, model_config=model_config
                 )
+            elif tv_type == 'state_vector':
+                val_result = evaluator.evaluate(
+                    model_wrapper, tokenizer, demonstration='',
+                    use_cache=args.config['use_cache'],
+                    sv_vector=context_vector, edit_layer=layer, model_config=model_config
+                )
             metric_value = val_result[args.metric]
             print(f"Layer {layer} validation {args.metric}: {metric_value:.4f}")
             if metric_value > best_metric:
@@ -61,7 +67,6 @@ def target_layer_selection(args, model_wrapper, tokenizer, evaluator, tv_type, c
                 best_layer = layer
     print(f"Selected layer {best_layer} (metric={best_metric:.4f})")
     return best_layer
-
 
 def build_train_queries(train_dataset, max_queries, exclude_indices=None):
     total = len(train_dataset.all_data)
@@ -275,8 +280,8 @@ def main(args):
                         context_vector_dict[layer][module] = activation.cpu().numpy().tolist()
             cv_save_dict[args.run_name] = context_vector_dict
 
-            with open(args.save_dir + '/i2cl_default_save_dict.json', 'w') as f:
-                json.dump(cv_save_dict, f, indent=4)
+            #with open(args.save_dir + '/i2cl_default_save_dict.json', 'w') as f:
+            #    json.dump(cv_save_dict, f, indent=4)
             '''
             # 1. fix strength_params
             # TODO: 선택으로 바꾸기
@@ -408,6 +413,7 @@ def main(args):
 
             # 2. compute mean_head_activations
             utils.set_seed(args.config['seed']+run_id)
+            class_num = train_dataset.class_num
             mean_activations = get_mean_head_activations(
                 dataset_fv, model=model, model_config=model_config, tokenizer=tokenizer,
                 n_icl_examples=args.shot_num,
@@ -416,16 +422,22 @@ def main(args):
                 )
             args.mean_activations_path = f'{args.save_dir}/{args.dataset_name}_mean_head_activations_{run_id}run.pt'
             #torch.save(mean_activations, args.mean_activations_path)
-
+            fv_t2 = time.time()
             # 3. load or re-compute indirect_effect values
             if config['universal_fv'] == False:
-                fv, top_heads = compute_function_vector(
-                    mean_activations, model, model_config=model_config, n_top_heads=args.n_top_heads
+                indirect_effect = compute_indirect_effect(
+                    dataset=dataset_fv, mean_activations=mean_activations, model=model, model_config=model_config, tokenizer=tokenizer, last_token_only=True,
+                    n_shots=args.shot_num, prefixes=args.prefixes, separators=args.separators, n_trials=config['n_indirect_effect_trials'],
+                    filter_set=filter_set_validation
+                    )
+                fv, top_heads, _ = compute_function_vector(
+                    mean_activations, indirect_effect, model, model_config=model_config, n_top_heads=args.n_top_heads
                     )
             else:
                 fv, top_heads = compute_universal_function_vector(
                     mean_activations, model, model_config=model_config, n_top_heads=args.n_top_heads
                     )
+            fv_t3 = time.time()
 
             # 4. evaluate FV
             if config['choose_layer'] == False:
@@ -440,6 +452,7 @@ def main(args):
                     args, base_wrapper, tokenizer, val_evaluator, tv_type = "function_vector",
                     context_vector = fv, model_config=model_config
                 )
+            fv_t4 = time.time()
 
             utils.set_seed(args.config['seed'])
             fv_results = {}
@@ -459,15 +472,24 @@ def main(args):
             result_dict['best_replace_layer']['fv'].append(eval_edit_layer)
             result_dict['time']['fv'].append(fv_end - fv_start)
             print(f"Test FV: {fv_results}\n")
+            print(f'[Time Debug] FV mean activation time: {fv_t2 - fv_start:.2f}s, FV computation time: {fv_t3 - fv_t2:.2f}s, layer selection time: {fv_t4 - fv_t3:.2f}s, evaluation time: {fv_end - fv_t4:.2f}s\n')
 
+            with open(os.path.join(args.save_dir, 'result_dict.json'), 'w') as f:
+                json.dump(result_dict, f, indent=4)
+            if kl_dict['i2cl_default'] or kl_dict['i2cl_train'] or kl_dict['ICLTV'] or kl_dict['fv'] or kl_dict['m2'] or kl_dict['m2_adaptive']:
+                with open(os.path.join(args.save_dir, 'kl_divergence.json'), 'w') as f:
+                    json.dump(kl_dict, f, indent=4)
+            
             if args.config.get('compute_kl_divergence', False) and test_few_logits is not None:
-                assert test_few_labels == fv_answer_labels, "Label mismatch between few-shot and FV results!"
+                assert test_few_labels == fv_answer_labels, "Label mismatch between few-shot and ICL TV results!"
                 mean_kl_fv = utils.compute_kl_divergence(
                     test_few_logits, test_fv_logits, is_qwen='Qwen' in args.model_name
                 )
-                print(f"KL divergence (Few-shot vs FV): {mean_kl_fv:.4f}")
-                kl_dict['fv'][args.run_name] = {"mean_kl": mean_kl_fv}
-
+                print(f"KL divergence (Few-shot vs ICL TV): {mean_kl_fv:.4f}")
+                kl_dict['fv'][args.run_name] = {
+                    "mean_kl": mean_kl_fv
+                }
+                
         ################## SV baseline ##################
         if args.config['run_sv']:
             print("Evaluating State Vector baseline...")

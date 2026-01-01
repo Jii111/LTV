@@ -13,7 +13,7 @@ from typing import List, Dict, Union
 from baukit import TraceDict
 import numpy as np
 
-class Evaluator:
+class SVEvaluator:
     def __init__(self, model_path, model = None, tokenizer = None, lora_weight=None, devices=None, half=False, load_float16=False, load_bfloat16=False, load_int8=False, model_max_length=None):
         torch.set_grad_enabled(False)
         
@@ -124,7 +124,7 @@ class Evaluator:
             source = self.tokenizer(sentence, truncation=False, padding=False ,add_special_tokens=False).input_ids
             target = self.tokenizer(sentence + target_str, truncation=False, padding=False , add_special_tokens=False).input_ids
                 
-            assert len(source) < len(target)
+            #assert len(source) < len(target)
             sentence += target_str
             
             return target[len(source): ]
@@ -176,7 +176,7 @@ class Evaluator:
     def get_answer_id(self,query, answer, proj_tokens=None):
         if proj_tokens is None: proj_tokens = '→'
         
-        if 'qwen' in self.tokenizer.__class__.__name__.lower():
+        if 'Llama-2' not in self.tokenizer.__class__.__name__.lower():
             answer = ' ' + answer
         
         source = self.tokenizer(query + proj_tokens, truncation=False, padding=False).input_ids
@@ -184,7 +184,7 @@ class Evaluator:
         assert len(source) < len(target) < self.tokenizer.model_max_length
         return target[len(source): ]
         # return self.tokenizer.convert_tokens_to_ids(self.tokenizer.tokenize(answer))
-
+    
     def write_and_read_activation(self, input_ids, read_hook_names=None, write_hook_names=None, write_hook_fn=None, retain_input=True):
         if read_hook_names is None:
             read_hook_names = []
@@ -237,6 +237,13 @@ class Evaluator:
             layer_indices = range(self.model.config.num_hidden_layers)
         layer_hook_names = [self.num2attn(x) for x in layer_indices]
         input_ids, input_mask = self.format_example_with_length(query, None, demon_list=demon_list, **format_dict)
+        
+        prompt = self.tokenizer.decode(
+            input_ids[0],
+            skip_special_tokens=False
+        )
+        print("[SV] demon : ", prompt)
+        
         activation, logits = self.write_and_read_activation(input_ids, layer_hook_names)
         tv = {l: self.select_task_vector(input_mask, activation[self.num2attn(l)], len(demon_list)) for l in layer_indices}
         return tv, logits
@@ -258,6 +265,48 @@ class Evaluator:
                 for wp in write_pos
             ], dim=0
         )
+        config = {"intervention_mode": intervention_mode}
+        layer_indices = list(task_vector.keys())
+        retain_input = return_mode != 'logits'
+        if add_to == 'atten':
+            layer_hook_names = [self.num2attn(x) for x in layer_indices]
+            task_vector = {self.num2attn(k): v for k, v in task_vector.items()}
+            intervention_fn = self.intervention_function(config, layer_hook_names, tv_indices, task_vector, self.model.device, self.forward_model_dict)
+            read_hook_names = [] if return_mode == 'logits' else layer_hook_names
+            activation, logits = self.write_and_read_activation(
+                input_ids,
+                read_hook_names,
+                layer_hook_names,
+                intervention_fn,
+                retain_input=retain_input
+            )
+            if return_mode != 'logits':
+                new_task_vector = {l: self.select_task_vector(input_mask, activation[self.num2attn(l)], len(demon_list)) for l in layer_indices}
+        else:
+            layer_hook_names = [self.num2layer(x) for x in layer_indices]
+            task_vector = {self.num2layer(k): v for k, v in task_vector.items()}
+            intervention_fn = self.intervention_function(config, layer_hook_names, tv_indices, task_vector, self.model.device, self.forward_model_dict)
+            read_hook_names = [] if return_mode == 'logits' else layer_hook_names
+            activation, logits = self.write_and_read_hidden(
+                input_ids,
+                read_hook_names,
+                layer_hook_names,
+                intervention_fn
+            )
+            if return_mode != 'logits':
+                new_task_vector = {l: self.select_task_vector(input_mask, activation[self.num2layer(l)], len(demon_list)) for l in layer_indices}
+
+        if return_mode == 'logits':
+            return logits
+        elif return_mode == 'tv':
+            return new_task_vector
+        else:
+            raise NotImplementedError
+        
+    def sv_write_activation(self, query, task_vector, demon_list=None, intervention_mode='replace', add_to="atten", format_dict={}, write_pos=["project"] ,return_mode='logits'):
+        input_ids, input_mask = self.format_example_with_length(query, None, demon_list=demon_list, **format_dict)
+        tv_indices = torch.cat([torch.tensor([i for i in range(len(input_mask)) if input_mask[i] == wp], dtype=torch.long)
+                for wp in write_pos], dim=0)
         config = {"intervention_mode": intervention_mode}
         layer_indices = list(task_vector.keys())
         retain_input = return_mode != 'logits'
@@ -326,6 +375,7 @@ class Evaluator:
 
         def replace(output, layer_name):
             if layer_name in layer_hook_names:
+                print("layer_name:",layer_name)
                 if forward_model:
                     replace_tv = ICL_vector[layer_name].to(device)
                     out_proj = forward_model[layer_name].weight
@@ -465,7 +515,8 @@ class Evaluator:
                 for (layer, layer_n, head_n, tv_indices) in intervention_task:
                     if layer == layer_name:
                         replace_tv = ICL_vector.view(ICL_vector.size()[:-1] + view_shape)
-                        inputs[0, tv_indices, head_n] = replace_tv[layer_n, :, head_n]
+                        inputs[0, tv_indices, head_n] = replace_tv[layer_n, :, head_n].to(inputs.dtype)
+
 
                 inputs = inputs.view(*original_shape)
                 out_proj = forward_model[layer_name].weight

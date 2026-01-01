@@ -64,23 +64,25 @@ def get_mean_head_activations(dataset, model, model_config, tokenizer, n_icl_exa
     mean_activations: avg activation of each attention head in the model taken across n_trials ICL prompts
     """
     def split_activations_by_head(activations, model_config):
-        new_shape = activations.size()[:-1] + (model_config['n_heads'], model_config['resid_dim']//model_config['n_heads']) # split by head: + (n_attn_heads, hidden_size/n_attn_heads)
+        new_shape = activations.size()[:-1] + (model_config.fv['n_heads'], model_config.fv['resid_dim']//model_config.fv['n_heads']) # split by head: + (n_attn_heads, hidden_size/n_attn_heads)
         activations = activations.view(*new_shape)  # (batch_size, n_tokens, n_heads, head_hidden_dim)
         return activations
     
     n_test_examples = 1
     if prefixes is not None and separators is not None:
-        dummy_labels = get_dummy_token_labels(n_icl_examples, tokenizer=tokenizer, prefixes=prefixes, separators=separators, model_config=model_config)
+        dummy_labels = get_dummy_token_labels(n_icl_examples, tokenizer=tokenizer, prefixes=prefixes, separators=separators, model_config=model_config.fv)
     else:
-        dummy_labels = get_dummy_token_labels(n_icl_examples, tokenizer=tokenizer, model_config=model_config)
-    activation_storage = torch.zeros(N_TRIALS, model_config['n_layers'], model_config['n_heads'], len(dummy_labels), model_config['resid_dim']//model_config['n_heads'])
+        dummy_labels = get_dummy_token_labels(n_icl_examples, tokenizer=tokenizer, model_config=model_config.fv)
+    #activation_storage = torch.zeros(N_TRIALS, model_config.fv['n_layers'], model_config.fv['n_heads'], len(dummy_labels), model_config.fv['resid_dim']//model_config.fv['n_heads'])
+    activation_storage = []
 
     if filter_set is None:
         filter_set = np.arange(len(dataset['validation']))
 
     # If the model already prepends a bos token by default, we don't want to add one
-    prepend_bos =  False if model_config['prepend_bos'] else True
+    prepend_bos =  False if model_config.fv['prepend_bos'] else True
 
+    
     for n in range(N_TRIALS):
         word_pairs = dataset['train'][np.random.choice(len(dataset['train']),min(n_icl_examples, len(dataset['train'])), replace=False)]
         #word_pairs = {"input": [x["input"] for x in dataset['train']], "output": [x["output"] for x in dataset['train']]}
@@ -91,26 +93,30 @@ def get_mean_head_activations(dataset, model, model_config, tokenizer, n_icl_exa
                                                     shuffle_labels=shuffle_labels, prefixes=prefixes, separators=separators)
         else:
             prompt_data = word_pairs_to_prompt_data(word_pairs, query_target_pair=word_pairs_test, prepend_bos_token=prepend_bos, shuffle_labels=shuffle_labels)
+        
         activations_td,idx_map,idx_avg = gather_attn_activations(prompt_data=prompt_data, 
-                                                            layers = model_config['attn_hook_names'], 
+                                                            layers = model_config.fv['attn_hook_names'], 
                                                             dummy_labels=dummy_labels, 
                                                             model=model, 
                                                             tokenizer=tokenizer, 
-                                                            model_config=model_config)
+                                                            model_config=model_config.fv)
         
-        stack_initial = torch.vstack([split_activations_by_head(activations_td[layer].input, model_config) for layer in model_config['attn_hook_names']]).permute(0,2,1,3)
+        stack_initial = torch.vstack([split_activations_by_head(activations_td[layer].input, model_config) for layer in model_config.fv['attn_hook_names']]).permute(0,2,1,3)
         stack_filtered = stack_initial[:,:,list(idx_map.keys())]
         for (i,j) in idx_avg.values():
+            if i not in idx_map:
+                print("skip i",i)
+                continue
             stack_filtered[:,:,idx_map[i]] = stack_initial[:,:,i:j+1].mean(axis=2) # Average activations of multi-token words across all its tokens
         
-        stack_filtered = stack_filtered.cpu()
-        
-        activation_storage[n] = stack_filtered
+        activation_storage.append(stack_filtered.cpu())
         
         del stack_filtered, stack_initial
         torch.cuda.empty_cache()
-
+    activation_storage = torch.stack(activation_storage, dim=0)
     mean_activations = activation_storage.mean(dim=0)
+    print("activation_storage.shape:", activation_storage.shape)
+    print("mean_activations.shape:", mean_activations.shape)
     return mean_activations
 
 # Layer Activations
@@ -172,7 +178,7 @@ def get_mean_layer_activations(dataset, model, model_config, tokenizer, n_icl_ex
     for n in range(N_TRIALS):
         word_pairs = dataset['train'][np.random.choice(len(dataset['train']),n_icl_examples, replace=False)]
         #word_pairs = {"input": [x["input"] for x in dataset['train']], "output": [x["output"] for x in dataset['train']]}
-        
+
         word_pairs_test = dataset['validation'][np.random.choice(filter_set,n_test_examples, replace=False)]
         if prefixes is not None and separators is not None:
             prompt_data = word_pairs_to_prompt_data(word_pairs, query_target_pair=word_pairs_test, prepend_bos_token=prepend_bos, 
@@ -329,8 +335,8 @@ def compute_function_vector(mean_activations, indirect_effect, model, model_conf
         function_vector: vector representing the communication of a particular task
         top_heads: list of the top influential heads represented as tuples [(L,H,S), ...], (L=Layer, H=Head, S=Avg. Indirect Effect Score)         
     """
-    model_resid_dim = model_config['resid_dim']
-    model_n_heads = model_config['n_heads']
+    model_resid_dim = model_config.fv['resid_dim']
+    model_n_heads = model_config.fv['n_heads']
     model_head_dim = model_resid_dim//model_n_heads
     device = model.device
 
@@ -359,17 +365,9 @@ def compute_function_vector(mean_activations, indirect_effect, model, model_conf
     T = -1 # Intervention & values taken from last token
 
     for L,H,_ in top_heads:
-        if 'gpt2-xl' in model_config['name_or_path']:
-            out_proj = model.transformer.h[L].attn.c_proj
-        elif 'gpt-j' in model_config['name_or_path']:
-            out_proj = model.transformer.h[L].attn.out_proj
-        elif 'llama' in model_config['name_or_path'] or 'gemma' in model_config['name_or_path'] or 'olmo' in model_config['name_or_path'].lower():
+        if 'llama' in model_config.fv['name_or_path'] or 'gemma' in model_config.fv['name_or_path'] or 'olmo' in model_config['name_or_path'].lower():
             out_proj = model.model.layers[L].self_attn.o_proj
-        elif 'gpt-neox' in model_config['name_or_path'] or 'pythia' in model_config['name_or_path']:
-            out_proj = model.gpt_neox.layers[L].attention.dense
-        elif 'Qwen' in model_config['name_or_path']:
-            out_proj = model.model.layers[L].self_attn.o_proj
-        elif 'Llama' in model_config['name_or_path']:
+        elif 'Qwen' in model_config.fv['name_or_path']:
             out_proj = model.model.layers[L].self_attn.o_proj
 
         x = torch.zeros(model_resid_dim)
@@ -398,19 +396,19 @@ def compute_universal_function_vector(mean_activations, model, model_config, n_t
         function_vector: vector representing the communication of a particular task
         top_heads: list of the top influential heads represented as tuples [(L,H,S), ...], (L=Layer, H=Head, S=Avg. Indirect Effect Score)         
     """
-    model_resid_dim = model_config['resid_dim']
-    model_n_heads = model_config['n_heads']
+    model_resid_dim = model_config.fv['resid_dim']
+    model_n_heads = model_config.fv['n_heads']
     model_head_dim = model_resid_dim//model_n_heads
     device = model.device
 
     # Universal Set of Heads
     
-    if 'gpt-j' in model_config['name_or_path']:
+    if 'gpt-j' in model_config.fv['name_or_path']:
         top_heads = [(15, 5, 0.0587), (9, 14, 0.0584), (12, 10, 0.0526), (8, 1, 0.0445), (11, 0, 0.0445), (13, 13, 0.019), (8, 0, 0.0184), (14, 9, 0.016), (9, 2, 0.0127), (24, 6, 0.0113), (15, 11, 0.0092),
                      (6, 6, 0.0069), (14, 0, 0.0068), (17, 8, 0.0068), (21, 2, 0.0067), (10, 11, 0.0066), (11, 2, 0.0057), (17, 0, 0.0054), (20, 11, 0.0051), (23, 0, 0.0047), (20, 0, 0.0046), (15, 7, 0.0045),
                      (27, 2, 0.0045), (21, 15, 0.0044), (11, 4, 0.0044), (18, 6, 0.0043), (9, 6, 0.0042), (4, 12, 0.004), (11, 15, 0.004), (20, 2, 0.0036), (10, 0, 0.0035), (16, 9, 0.0031), (11, 14, 0.0031),
                      (12, 4, 0.003), (9, 7, 0.003), (18, 3, 0.003), (19, 5, 0.003), (22, 5, 0.0027), (25, 3, 0.0026), (18, 9, 0.0025)]
-    elif 'Llama-2-7b' in model_config['name_or_path']:
+    elif 'Llama-2-7b' in model_config.fv['name_or_path']:
         top_heads = [(14, 1, 0.0391), (11, 2, 0.0225), (9, 25, 0.02), (12, 15, 0.0196), (12, 28, 0.0191), (13, 7, 0.0171), (11, 18, 0.0152), (12, 18, 0.0113), (16, 10, 0.007), (14, 16, 0.007),
                      (14, 14, 0.0048), (16, 1, 0.0042), (18, 1, 0.0042), (19, 16, 0.0041), (13, 30, 0.0034), (18, 26, 0.0032), (14, 7, 0.0032), (16, 0, 0.0031), (16, 29, 0.003), (29, 30, 0.003),
                      (16, 6, 0.0029), (15, 11, 0.0027), (12, 11, 0.0026), (11, 22, 0.0023), (16, 19, 0.0021), (15, 23, 0.002), (16, 20, 0.0019), (15, 9, 0.0019), (17, 28, 0.0019), (14, 18, 0.0018),
@@ -421,7 +419,7 @@ def compute_universal_function_vector(mean_activations, model, model_config, n_t
                      (6, 16, 0.0007), (7, 28, 0.0007), (27, 7, 0.0007), (11, 28, 0.0007), (29, 15, 0.0006), (13, 8, 0.0006), (13, 17, 0.0006), (8, 0, 0.0006), (22, 17, 0.0006), (22, 20, 0.0006), 
                      (12, 2, 0.0006), (26, 9, 0.0006), (31, 26, 0.0006), (22, 27, 0.0005), (16, 26, 0.0005), (13, 1, 0.0005), (26, 2, 0.0005), (30, 10, 0.0005), (11, 25, 0.0005), (29, 20, 0.0005),
                      (19, 15, 0.0005), (12, 10, 0.0005), (12, 3, 0.0005), (30, 5, 0.0004), (6, 9, 0.0004), (15, 16, 0.0004), (23, 28, 0.0004), (22, 5, 0.0004), (31, 19, 0.0004), (26, 14, 0.0004)]
-    elif 'Llama-2-13b' in model_config['name_or_path']:
+    elif 'Llama-2-13b' in model_config.fv['name_or_path']:
         top_heads = [(13, 13, 0.0402), (12, 17, 0.0332), (15, 38, 0.0269), (14, 34, 0.0209), (19, 2, 0.0116), (19, 36, 0.0106), (13, 4, 0.0106), (18, 11, 0.01), (10, 15, 0.0087), (13, 23, 0.0077),
                      (14, 7, 0.0074), (15, 36, 0.0046), (12, 8, 0.0046), (17, 7, 0.0044), (38, 29, 0.0043), (15, 32, 0.0037), (17, 18, 0.0034), (16, 9, 0.0033), (14, 23, 0.0032), (39, 13, 0.0029),
                      (39, 14, 0.0027), (18, 22, 0.0026), (21, 32, 0.0026), (15, 18, 0.0026), (13, 14, 0.0026), (11, 31, 0.0025), (14, 39, 0.0024), (19, 14, 0.0023), (36, 23, 0.0021), (21, 7, 0.0021),
@@ -432,7 +430,7 @@ def compute_universal_function_vector(mean_activations, model, model_config, n_t
                      (15, 34, 0.0007), (14, 29, 0.0007), (15, 7, 0.0007), (13, 17, 0.0007), (20, 11, 0.0007), (35, 16, 0.0007), (39, 27, 0.0007), (29, 27, 0.0006), (30, 24, 0.0006), (19, 37, 0.0006),
                      (39, 21, 0.0006), (13, 36, 0.0006), (37, 30, 0.0006), (16, 36, 0.0006), (15, 3, 0.0006), (19, 13, 0.0006), (13, 10, 0.0006), (14, 19, 0.0005), (36, 3, 0.0005), (15, 25, 0.0005),
                      (16, 0, 0.0005), (16, 10, 0.0005), (20, 29, 0.0005), (25, 13, 0.0005), (14, 36, 0.0005), (36, 7, 0.0005), (17, 0, 0.0005), (11, 37, 0.0005), (23, 18, 0.0005), (35, 10, 0.0005)]
-    elif 'Llama-2-70b' in model_config['name_or_path']:
+    elif 'Llama-2-70b' in model_config.fv['name_or_path']:
         top_heads = [(33, 63, 0.0315), (36, 3, 0.0313), (29, 7, 0.0193), (40, 50, 0.0147), (26, 57, 0.0136), (40, 57, 0.0134), (40, 54, 0.0127), (36, 0, 0.011), (29, 3, 0.0109), (39, 61, 0.0085),
                      (77, 8, 0.0082), (14, 29, 0.0079), (39, 26, 0.0074), (37, 17, 0.0069), (40, 55, 0.0066), (34, 40, 0.0064), (39, 56, 0.0063), (34, 41, 0.0061), (36, 54, 0.0058), (29, 1, 0.0058),
                      (38, 20, 0.0053), (40, 48, 0.0051), (39, 30, 0.005), (34, 60, 0.0048), (34, 42, 0.0045), (26, 62, 0.0044), (77, 15, 0.0044), (77, 14, 0.0042), (43, 63, 0.0041), (31, 27, 0.004),
@@ -460,7 +458,7 @@ def compute_universal_function_vector(mean_activations, model, model_config, n_t
                      (16, 0, 0.0004), (20, 19, 0.0004), (44, 57, 0.0004), (40, 34, 0.0004), (79, 25, 0.0004), (69, 27, 0.0004), (76, 26, 0.0004), (26, 30, 0.0004), (72, 31, 0.0004), (26, 29, 0.0004),
                      (55, 15, 0.0004), (33, 58, 0.0004), (18, 25, 0.0004), (25, 2, 0.0004), (33, 27, 0.0004), (20, 40, 0.0004), (24, 27, 0.0004), (17, 3, 0.0004), (18, 62, 0.0004), (47, 7, 0.0004),
                      (33, 28, 0.0004), (31, 11, 0.0004), (24, 28, 0.0004), (37, 7, 0.0004), (40, 7, 0.0004), (32, 61, 0.0004)]
-    elif 'gpt-neox' in model_config['name_or_path']:
+    elif 'gpt-neox' in model_config.fv['name_or_path']:
         top_heads = [(9, 42, 0.0293), (12, 4, 0.0224), (9, 28, 0.019), (11, 57, 0.0079), (10, 43, 0.0073), (12, 14, 0.0069), (14, 31, 0.0065), (9, 23, 0.0057), (11, 21, 0.0054), (11, 4, 0.0052),
                      (9, 21, 0.0052), (18, 23, 0.005), (13, 9, 0.0048), (14, 49, 0.0048), (12, 20, 0.0047), (8, 30, 0.0045), (12, 59, 0.0043), (16, 42, 0.0039), (11, 34, 0.0038), (9, 33, 0.0038),
                      (9, 3, 0.0036), (11, 48, 0.0035), (14, 63, 0.0032), (18, 11, 0.0032), (13, 7, 0.003), (9, 27, 0.0029), (11, 23, 0.0029), (16, 30, 0.0027), (10, 17, 0.0026), (9, 55, 0.0024),
@@ -471,18 +469,24 @@ def compute_universal_function_vector(mean_activations, model, model_config, n_t
                      (13, 46, 0.001), (15, 57, 0.001), (15, 17, 0.001), (19, 12, 0.0009), (9, 49, 0.0009), (10, 7, 0.0009), (19, 46, 0.0009), (8, 21, 0.0009), (25, 24, 0.0008), (19, 29, 0.0008),
                      (12, 21, 0.0008), (8, 18, 0.0008), (12, 35, 0.0008), (9, 10, 0.0008), (19, 40, 0.0008), (38, 5, 0.0008), (13, 31, 0.0007), (10, 38, 0.0007), (10, 12, 0.0007), (11, 31, 0.0007),
                      (10, 1, 0.0007), (23, 15, 0.0007), (13, 40, 0.0007), (9, 5, 0.0007), (22, 33, 0.0007), (13, 36, 0.0006), (8, 32, 0.0006), (16, 21, 0.0006), (14, 11, 0.0006), (13, 61, 0.0006)]
-    elif 'Qwen2.5-7B' in model_config['name_or_path']:
+    elif 'Qwen2.5-7B' in model_config.fv['name_or_path']:
         top_heads = [(0, 3, 0.1045), (18, 23, 0.1001), (0, 15, 0.0867), (17, 15, 0.0171), (20, 21, 0.0098), (22, 4, 0.0095), (22, 3, 0.0089), (22, 6, 0.0083), (17, 19, 0.0081), (16, 11, 0.008), 
                      (16, 13, 0.0078), (17, 4, 0.0073), (19, 16, 0.0061), (20, 22, 0.0052), (20, 2, 0.0047), (20, 6, 0.0047), (22, 2, 0.0046), (20, 24, 0.0046), (17, 17, 0.0043), (26, 19, 0.0042), 
                      (27, 14, 0.0041), (20, 8, 0.004), (14, 25, 0.004), (22, 1, 0.0039), (20, 14, 0.0035), (17, 10, 0.0034), (21, 15, 0.0032), (18, 26, 0.0032), (5, 18, 0.0031), (18, 22, 0.003), 
                      (18, 18, 0.003), (17, 20, 0.003), (14, 4, 0.003), (13, 25, 0.0029), (25, 24, 0.0029), (21, 14, 0.0028), (18, 10, 0.0025), (25, 15, 0.0024), (21, 6, 0.0024), (14, 8, 0.0023)]
-    elif 'Llama-3.1-8B' in model_config['name_or_path']:
+    elif 'Qwen3-8B' in model_config.fv['name_or_path']:
+        top_heads = [(0, 3, 0.1045), (18, 23, 0.1001), (0, 15, 0.0867), (17, 15, 0.0171), (20, 21, 0.0098), (22, 4, 0.0095), (22, 3, 0.0089), (22, 6, 0.0083), (17, 19, 0.0081), (16, 11, 0.008), 
+                     (16, 13, 0.0078), (17, 4, 0.0073), (19, 16, 0.0061), (20, 22, 0.0052), (20, 2, 0.0047), (20, 6, 0.0047), (22, 2, 0.0046), (20, 24, 0.0046), (17, 17, 0.0043), (26, 19, 0.0042), 
+                     (27, 14, 0.0041), (20, 8, 0.004), (14, 25, 0.004), (22, 1, 0.0039), (20, 14, 0.0035), (17, 10, 0.0034), (21, 15, 0.0032), (18, 26, 0.0032), (5, 18, 0.0031), (18, 22, 0.003), 
+                     (18, 18, 0.003), (17, 20, 0.003), (14, 4, 0.003), (13, 25, 0.0029), (25, 24, 0.0029), (21, 14, 0.0028), (18, 10, 0.0025), (25, 15, 0.0024), (21, 6, 0.0024), (14, 8, 0.0023)]
+    
+    elif 'Llama-3.1-8B' in model_config.fv['name_or_path']:
         top_heads = [(30, 30, -0.0675), (30, 31, -0.0691), (30, 15, -0.0719), (30, 21, -0.0726), (30, 9, -0.0728), (30, 14, -0.0732), (30, 26, -0.0733), (30, 16, -0.0737), (30, 29, -0.0738), 
                      (30, 28, -0.074), (30, 2, -0.074), (30, 11, -0.0741), (30, 10, -0.0741), (30, 22, -0.0741), (30, 25, -0.0741), (30, 1, -0.0741), (30, 3, -0.0742), (30, 13, -0.0742), 
                      (30, 5, -0.0742), (30, 6, -0.0742), (30, 23, -0.0742), (30, 17, -0.0742), (30, 7, -0.0743), (30, 19, -0.0743), (30, 4, -0.0744), (30, 18, -0.0744), (30, 8, -0.0745), 
                      (30, 24, -0.0748), (30, 20, -0.0749), (30, 0, -0.0752), (30, 12, -0.0779), (30, 27, -0.0944), (25, 6, -0.1181), (25, 15, -0.1267), (25, 4, -0.1271), (25, 17, -0.1271), 
                      (25, 24, -0.1271), (25, 8, -0.1273), (25, 26, -0.1275), (25, 28, -0.1275)]
-    elif 'Llama-3-8B' in model_config['name_or_path']:
+    elif 'Llama-3-8B' in model_config.fv['name_or_path']:
         top_heads = [(13, 27, 0.0441), (10, 5, 0.0101), (11, 5, 0.0092), (28, 15, 0.0052), (10, 12, 0.0047), (12, 9, 0.0044), (15, 17, 0.0039), (9, 27, 0.0037), (15, 1, 0.0035), (11, 30, 0.0031), 
                      (13, 4, 0.0029), (14, 27, 0.0029), (13, 13, 0.0027), (26, 15, 0.0027), (20, 14, 0.0025), (16, 19, 0.0023), (13, 6, 0.0021), (14, 6, 0.002), (12, 21, 0.0019), (16, 17, 0.0019), 
                      (10, 7, 0.0018), (12, 0, 0.0018), (14, 14, 0.0018), (15, 10, 0.0018), (19, 3, 0.0018), (15, 20, 0.0017), (17, 27, 0.0017), (30, 25, 0.0017), (11, 28, 0.0016), (13, 16, 0.0016), 
@@ -494,17 +498,17 @@ def compute_universal_function_vector(mean_activations, model, model_config, n_t
     T = -1 # Intervention & values taken from last token
 
     for L,H,_ in top_heads:
-        if 'gpt2-xl' in model_config['name_or_path']:
+        if 'gpt2-xl' in model_config.fv['name_or_path']:
             out_proj = model.transformer.h[L].attn.c_proj
-        elif 'gpt-j' in model_config['name_or_path']:
+        elif 'gpt-j' in model_config.fv['name_or_path']:
             out_proj = model.transformer.h[L].attn.out_proj
-        elif 'llama' in model_config['name_or_path']:
+        elif 'llama' in model_config.fv['name_or_path']:
             out_proj = model.model.layers[L].self_attn.o_proj
-        elif 'gpt-neox' in model_config['name_or_path']:
+        elif 'gpt-neox' in model_config.fv['name_or_path']:
             out_proj = model.gpt_neox.layers[L].attention.dense
-        elif 'Qwen' in model_config['name_or_path']:
+        elif 'Qwen' in model_config.fv['name_or_path']:
             out_proj = model.model.layers[L].self_attn.o_proj
-        elif 'Llama' in model_config['name_or_path']:
+        elif 'Llama' in model_config.fv['name_or_path']:
             out_proj = model.model.layers[L].self_attn.o_proj
 
         x = torch.zeros(model_resid_dim)
