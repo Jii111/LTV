@@ -15,7 +15,8 @@ import yaml
 import wrapper
 import my_datasets as md
 from peft import PromptTuningConfig, PeftModel
-
+from transformers import BitsAndBytesConfig
+import re
 
 def set_seed(seed):
     random.seed(seed)
@@ -57,15 +58,24 @@ def load_model_tokenizer(model_name, device, output_hidden_states=True, load_in_
         tokenizer = AutoTokenizer.from_pretrained(model_name)
 
     if 'Qwen' in model_name:
-        model = AutoModelForCausalLM.from_pretrained(
-                model_name,
+        if load_in_8bit:
+            quant_cfg = BitsAndBytesConfig(load_in_8bit=load_in_8bit) if load_in_8bit else None
+            model = AutoModelForCausalLM.from_pretrained(
+                model_name, torch_dtype=torch.bfloat16,
+                quantization_config=quant_cfg,
+                device_map="auto", low_cpu_mem_usage=True)
+        else:
+            model = AutoModelForCausalLM.from_pretrained(
+                model_name, load_in_8bit=load_in_8bit,
                 dtype=torch.bfloat16)
+        
     else:
         model = AutoModelForCausalLM.from_pretrained(model_name,
                                                  output_hidden_states=output_hidden_states,
-                                                 load_in_8bit=load_in_8bit,
+                                                 load_in_8bit=load_in_8bit, #oad_in_8bit,
                                                  torch_dtype=torch.float16) # 32 -> 16 수정
 
+    print("loaded_in_8bit:", getattr(model, "is_loaded_in_8bit", False))
     # Ensure hidden states are available when requested
     if hasattr(model, "config"):
         model.config.output_hidden_states = output_hidden_states
@@ -76,6 +86,7 @@ def load_model_tokenizer(model_name, device, output_hidden_states=True, load_in_
         
     config = AutoConfig.from_pretrained(model_name)
     tokenizer.pad_token = tokenizer.eos_token
+    
     tokenizer.padding_side = 'left'
     
     if "qwen" in model_name.lower() or "llama" in model_name.lower():
@@ -474,7 +485,86 @@ class TensorStrFinder:
             s_tensor in list_s_tensor]
         mask_tensor = functools.reduce(torch.logical_or, mask_tensor_list)
         return mask_tensor
+
+def compute_kl_divergence(logits_p, logits_q, is_qwen=False):
+      probs_p = F.softmax(logits_p, dim=-1)
+      probs_q = F.softmax(logits_q, dim=-1)
+
+      print()
+      print("few logits mean/std:", logits_p.mean().item(), logits_q.std().item())
+      print("method logits mean/std:", logits_p.mean().item(), logits_q.std().item())
+
+      kl_elem = probs_p * (torch.log(probs_p) - torch.log(probs_q))
+      kl = kl_elem.sum(dim=-1).float()  # (num_test_query,)
+
+      print()
+      print("[DEBUG] ALL KL values", kl)
+      print()
+
+      valid = torch.isfinite(kl)
+      if valid.any():
+          kl_mean = kl[valid].mean()
+      else:
+          kl_mean = torch.tensor(float("nan"), device=kl.device)
+
+      print("====> KL : ", kl_mean.item())
+
+      q1, q2, q3 = torch.quantile(
+          kl[valid],
+          torch.tensor([0.25, 0.5, 0.75], device=kl.device)
+      )
+
+      print("[DEBUG] KL stats")
+      print("  min :", kl[valid].min().item())
+      print("  Q1  :", q1.item())
+      print("  Q2  :", q2.item())
+      print("  Q3  :", q3.item())
+      print("  max :", kl[valid].max().item())
+
+      return kl_mean.item()
     
+def compute_kl_divergence1(logits_p, logits_q, is_qwen=False):
+      probs_p = F.softmax(logits_p, dim=-1)
+      probs_q = F.softmax(logits_q, dim=-1)
+
+      print()
+      print("few logits mean/std:", logits_p.mean().item(), logits_q.std().item())
+      print("method logits mean/std:", logits_p.mean().item(), logits_q.std().item())
+
+      kl_elem = probs_p * (torch.log(probs_p) - torch.log(probs_q))
+
+      # inf/nan 제외용 마스크
+      valid = torch.isfinite(kl_elem)
+
+      # 유효한 값만 합산 (invalid는 0으로 처리)
+      kl_sum = torch.where(valid, kl_elem, torch.zeros_like(kl_elem)).sum(dim=-1).float()
+      valid_count = valid.sum(dim=-1).clamp_min(1).float()
+
+      kl_per_sample = kl_sum / valid_count
+
+      # 샘플 단위에서도 inf/nan 제외
+      valid_sample = torch.isfinite(kl_per_sample) & (valid_count > 0)
+      kl_mean = kl_per_sample[valid_sample].mean()
+
+      print()
+      print("[DEBUG] ALL KL values", kl_per_sample)
+      print()
+      print("====> KL : ", kl_mean.item())
+
+      q1, q2, q3 = torch.quantile(
+          kl_per_sample[valid_sample],
+          torch.tensor([0.25, 0.5, 0.75], device=kl_per_sample.device)
+      )
+
+      print("[DEBUG] KL stats")
+      print("  min :", kl_per_sample[valid_sample].min().item())
+      print("  Q1  :", q1.item())
+      print("  Q2  :", q2.item())
+      print("  Q3  :", q3.item())
+      print("  max :", kl_per_sample[valid_sample].max().item())
+
+      return kl_mean.item()
+
 def compute_kl_divergence(logits_p, logits_q, is_qwen=False):
     probs_p = F.softmax(logits_p, dim=-1)
     probs_q = F.softmax(logits_q, dim=-1)
@@ -483,6 +573,8 @@ def compute_kl_divergence(logits_p, logits_q, is_qwen=False):
     mismatch_count = support_mismatch.sum().item()
     
     print()
+    print("few logits mean/std:", logits_p.mean().item(), logits_q.std().item())
+    print("method logits mean/std:", logits_p.mean().item(), logits_q.std().item())
 
     if mismatch_count > 0:
         bad_ids = torch.where(support_mismatch)[-1]
@@ -541,75 +633,208 @@ def nested_set(d, keys, value):
         d = d[k]
     d[keys[-1]] = value
     
-def convert_to_svdataset(split_demon, train_dataset, demon_indices, val_dataset, test_dataset, tokenizer, run_id, args):
+def convert_to_svdataset1(split_demon, train_dataset, demon_indices, val_dataset, test_dataset, tokenizer, run_id, args):
+      def split_query_and_label_prompt(input_str):
+          # 마지막 라벨 줄(예: "Type:" / "Label:" / "Sentiment:") 찾기
+          m = re.search(r"\n([A-Za-z _-]+:)\s*$", input_str)
+          if m:
+              label_prompt = m.group(1)
+              query_part = input_str[:m.start()].rstrip()
+          else:
+              label_prompt = "Label:"
+              query_part = input_str
+
+          # 항상 공백 포함으로 정규화
+          if not label_prompt.endswith(" "):
+              label_prompt = label_prompt + " "
+          return query_part, label_prompt
+
+      def strip_label_prefix(text, label_prompt):
+          # "Type:World" / "Type: World" 둘 다 제거
+          if label_prompt:
+              prefix_no_space = label_prompt.rstrip()
+              if text.startswith(label_prompt):
+                  return text[len(label_prompt):].strip()
+              if text.startswith(prefix_no_space):
+                  return text[len(prefix_no_space):].lstrip()
+          # fallback
+          if re.match(r"^[A-Za-z _-]+:\s*", text):
+              return re.sub(r"^[A-Za-z _-]+:\s*", "", text).strip()
+          return text
+
+      def clean_input(raw_list):
+          out = []
+          label_prompt = None
+          for e in raw_list:
+              if isinstance(e, dict):
+                  inp = e.get("input", "").strip()
+                  outp = e.get("output", "").strip()
+              elif isinstance(e, str):
+                  # 멀티라인이면 전체에서 마지막 라벨 줄 추출
+                  lines = [l.rstrip() for l in e.split("\n") if l.strip() != ""]
+                  label_idx = None
+                  for i in range(len(lines)-1, -1, -1):
+                      if re.match(r"^[A-Za-z _-]+:\s*.*$", lines[i]):
+                          label_idx = i
+                          break
+                  if label_idx is None:
+                      inp = e.strip()
+                      outp = ""
+                  else:
+                      inp = "\n".join(lines[:label_idx]).strip()
+                      outp = lines[label_idx].strip()
+              else:
+                  continue
+
+              query_part, lp = split_query_and_label_prompt(inp)
+              if label_prompt is None:
+                  label_prompt = lp
+
+              outp = strip_label_prefix(outp, label_prompt)
+              out.append({"input": query_part, "output": outp})
+          return out, label_prompt
+
+      _, valid_split_demon = val_dataset.gen_few_shot_demonstration(
+          tokenizer=tokenizer,
+          shot_num=min(len(val_dataset), args.config['val_data_num']),
+          max_demonstration_tok_len=min(args.val_max_token, args.test_max_token),
+          add_extra_query=args.config['add_extra_query'],
+          example_separator=args.config['example_separator'],
+          return_data_index=False,
+          seed=args.config['demo_seed'] + run_id,
+          index_info=None,
+          sv_data=True
+      )
+      valid_split_demon, label_prompt = clean_input(valid_split_demon)
+
+      _, test_split_demon = test_dataset.gen_few_shot_demonstration(
+          tokenizer=tokenizer,
+          shot_num=min(len(test_dataset), args.config['test_data_num']),
+          max_demonstration_tok_len=min(args.val_max_token, args.test_max_token),
+          add_extra_query=args.config['add_extra_query'],
+          example_separator=args.config['example_separator'],
+          return_data_index=False,
+          seed=args.config['demo_seed'] + run_id,
+          index_info=None,
+          sv_data=True
+      )
+      test_split_demon, _ = clean_input(test_split_demon)
+      test_split_demon = test_split_demon[:-1]
+
+      all_idx = list(range(len(train_dataset.all_data)))
+      candidate_idx = [i for i in all_idx if i not in demon_indices]
+      if len(candidate_idx) < 10:
+          raise ValueError("train_dummy_split_demon 후보 index 부족")
+      dummy_idx = random.sample(candidate_idx, 10)
+
+      train_dummy_split_demon = []
+      for idx in dummy_idx:
+          input_str, ans_str, label = train_dataset.apply_template(train_dataset.all_data[idx])
+          query_part, lp = split_query_and_label_prompt(input_str)
+          if label_prompt is None:
+              label_prompt = lp
+          outp = strip_label_prefix(ans_str[label], label_prompt)
+          train_dummy_split_demon.append({"input": query_part, "output": outp})
+
+      split_demon, _ = clean_input(split_demon)
+      split_demon = split_demon[:-1]
+
+      if label_prompt is None:
+          label_prompt = "Label: "
+
+      return split_demon, train_dummy_split_demon, valid_split_demon, test_split_demon, label_prompt
     
-    def clean_input(raw_list):
-        out = []
-        for e in raw_list:
-            # dict 형태
-            if isinstance(e, dict):
-                inp = e.get("input", "").strip()
-                outp = e.get("output", "").strip()
+def convert_to_svdataset2(split_demon, train_dataset, demon_indices, val_dataset, test_dataset, tokenizer, run_id, args):
+      def split_query_and_label_prompt(input_str):
+          # 끝줄이 "Label:" / "Sentiment:" 같은 라벨 프롬프트면 분리
+          m = re.search(r"\n([A-Za-z _-]+:)\s*$", input_str)
+          if m:
+              label_prompt = m.group(1)
+              query_part = input_str[:m.start()].rstrip()
+          else:
+              label_prompt = "Label:"
+              query_part = input_str
+          return query_part, label_prompt
 
-            # 문자열 형태
-            elif isinstance(e, str):
-                parts = e.split("\n")
-                inp = parts[0].strip()
-                outp = parts[1].strip() if len(parts) > 1 else ""
-            else:
-                continue
+      def strip_label_prefix(text, label_prompt):
+          # output이 "Label: company"면 제거
+          if label_prompt and text.startswith(label_prompt):
+              return text[len(label_prompt):].strip()
+          # 혹시 "Label:company"처럼 붙어있을 때도 처리
+          if re.match(r"^[A-Za-z _-]+:\s*", text):
+              return re.sub(r"^[A-Za-z _-]+:\s*", "", text).strip()
+          return text
 
-            # prefix 제거 (":" 기준 1번만 split)
-            if ":" in inp:
-                inp = inp.split(":", 1)[1].strip()
+      def clean_input(raw_list):
+          out = []
+          label_prompt = None
+          for e in raw_list:
+              if isinstance(e, dict):
+                  inp = e.get("input", "").strip()
+                  outp = e.get("output", "").strip()
+              elif isinstance(e, str):
+                  parts = e.split("\n")
+                  inp = parts[0].strip()
+                  outp = parts[1].strip() if len(parts) > 1 else ""
+              else:
+                  continue
 
-            out.append({"input": inp, "output": outp})
-        return out
+              query_part, lp = split_query_and_label_prompt(inp)
+              if label_prompt is None:
+                  label_prompt = lp
 
+              outp = strip_label_prefix(outp, label_prompt)
+              out.append({"input": query_part, "output": outp})
+          return out, label_prompt
 
-    _, valid_split_demon = val_dataset.gen_few_shot_demonstration(
-        tokenizer=tokenizer,
-        shot_num=min(len(val_dataset), args.config['val_data_num']),
-        max_demonstration_tok_len=min(args.val_max_token, args.test_max_token),
-        add_extra_query=args.config['add_extra_query'],
-        example_separator=args.config['example_separator'],
-        return_data_index=False,
-        seed=args.config['demo_seed'] + run_id,
-        index_info=None,
-        sv_data=True
-    )
-    valid_split_demon = clean_input(valid_split_demon)
+      _, valid_split_demon = val_dataset.gen_few_shot_demonstration(
+          tokenizer=tokenizer,
+          shot_num=min(len(val_dataset), args.config['val_data_num']),
+          max_demonstration_tok_len=min(args.val_max_token, args.test_max_token),
+          add_extra_query=args.config['add_extra_query'],
+          example_separator=args.config['example_separator'],
+          return_data_index=False,
+          seed=args.config['demo_seed'] + run_id,
+          index_info=None,
+          sv_data=True
+      )
+      valid_split_demon, label_prompt = clean_input(valid_split_demon)
 
-    _, test_split_demon = test_dataset.gen_few_shot_demonstration(
-        tokenizer=tokenizer,
-        shot_num=min(len(test_dataset), args.config['test_data_num']),
-        max_demonstration_tok_len=min(args.val_max_token, args.test_max_token),
-        add_extra_query=args.config['add_extra_query'],
-        example_separator=args.config['example_separator'],
-        return_data_index=False,
-        seed=args.config['demo_seed'] + run_id,
-        index_info=None,
-        sv_data=True
-    )
-    test_split_demon = clean_input(test_split_demon)[:-1]
-    
-    all_idx = list(range(len(train_dataset.all_data)))
-    candidate_idx = [i for i in all_idx if i not in demon_indices]
+      _, test_split_demon = test_dataset.gen_few_shot_demonstration(
+          tokenizer=tokenizer,
+          shot_num=min(len(test_dataset), args.config['test_data_num']),
+          max_demonstration_tok_len=min(args.val_max_token, args.test_max_token),
+          add_extra_query=args.config['add_extra_query'],
+          example_separator=args.config['example_separator'],
+          return_data_index=False,
+          seed=args.config['demo_seed'] + run_id,
+          index_info=None,
+          sv_data=True
+      )
+      test_split_demon, _ = clean_input(test_split_demon)
+      test_split_demon = test_split_demon[:-1]
 
-    if len(candidate_idx) < 10:
-        raise ValueError("train_dummy_split_demon 후보 index 부족")
+      # dummy train query
+      all_idx = list(range(len(train_dataset.all_data)))
+      candidate_idx = [i for i in all_idx if i not in demon_indices]
+      if len(candidate_idx) < 10:
+          raise ValueError("train_dummy_split_demon 후보 index 부족")
+      dummy_idx = random.sample(candidate_idx, 10)
 
-    dummy_idx = random.sample(candidate_idx, 10)
+      train_dummy_split_demon = []
+      for idx in dummy_idx:
+          input_str, ans_str, label = train_dataset.apply_template(train_dataset.all_data[idx])
+          query_part, lp = split_query_and_label_prompt(input_str)
+          if label_prompt is None:
+              label_prompt = lp
+          outp = strip_label_prefix(ans_str[label], label_prompt)
+          train_dummy_split_demon.append({"input": query_part, "output": outp})
 
-    train_dummy_split_demon = []
-    for idx in dummy_idx:
-        input_str, ans_str, label = train_dataset.apply_template(train_dataset.all_data[idx])
-        train_dummy_split_demon.append({
-            "input": input_str,
-            "output": ans_str[label]
-        })
-        
-    split_demon = clean_input(split_demon)
-    split_demon = split_demon[:-1]
+      split_demon, _ = clean_input(split_demon)
+      split_demon = split_demon[:-1]
 
-    return split_demon, train_dummy_split_demon, valid_split_demon, test_split_demon
+      if label_prompt is None:
+          label_prompt = "Label:"
+
+      return split_demon, train_dummy_split_demon, valid_split_demon, test_split_demon, label_prompt
+  
