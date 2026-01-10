@@ -121,6 +121,7 @@ class SVEvaluator:
         def tokenize(target_str):
             nonlocal sentence
             target_str = target_str.rstrip(' ')
+            target_str = target_str.rstrip(' ')
             source = self.tokenizer(sentence, truncation=False, padding=False ,add_special_tokens=False).input_ids
             target = self.tokenizer(sentence + target_str, truncation=False, padding=False , add_special_tokens=False).input_ids
                 
