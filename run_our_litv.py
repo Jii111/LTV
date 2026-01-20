@@ -25,6 +25,7 @@ import os
 import sys
 import time
 import random
+import re
 import torch
 from tqdm import tqdm
 import evaluator as ev
@@ -276,6 +277,21 @@ def main(args):
                             return_logits=args.config['return_logits']
                         )
                     m2a_end = time.time()
+                    if args.config.get('save_m2a_figures', False):
+                        h_list = [d["h"] for d in m2_adaptive_wrapper.injected_deltas if "h" in d]
+                        delta_list = [d["delta"] for d in m2_adaptive_wrapper.injected_deltas if "delta" in d]
+                        if h_list and delta_list and len(h_list) == len(delta_list):
+                            h_states = torch.stack(h_list)
+                            deltas = torch.stack(delta_list)
+                            raw_prefix = f"{args.run_name}_{q_key}_{lam_key}"
+                            safe_prefix = re.sub(r"[^A-Za-z0-9_.-]+", "_", raw_prefix)
+                            utils.save_m2a_figures(
+                                h_states,
+                                deltas,
+                                args.save_dir,
+                                safe_prefix,
+                                add_permuted=args.config.get('plot_permuted_control', False),
+                            )
                     utils.nested_set(m2a_test_dict, [q_key, lam_key], test_m2a)
                     result_dict['time']['m2_adaptive'].append(m2a_end - m2a_start)
                     print(f"Test M2-Adaptive: {test_m2a}\n")

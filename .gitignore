@@ -1,28 +1,6 @@
-train_config/check.py
-train_config/fix_configs.py
-delete_repo.py
-
-I2CL/configs/config_i2cl.py
-
-results/*
-/results/
-.idea/*
-I2CL/exps/*
-ICL-State-Vector
-
-plot_brokenaxis1_Llama-3.1-8B/*
-plot_brokenaxis1_Qwen2.5-7B/*
-I2CL/plot1_corr.py
-I2CL/plot2_corr.py
-I2CL/plot3_corr.py
-I2CL/plot4_corr.py
-I2CL/plot1_exp.py
-corr_plot_individual.py
-wrap_exp_result.py
 *.png
 *.txt
 *.svg
-extract_maintable_result.py
 
 # Cache / Logs
 .log/
@@ -37,26 +15,3 @@ __pycache__/
 checkpoints
 
 wandb
-
-# 실험용 파일
-I2CL/configs/config_baseline_all2.py
-I2CL/configs/config_baseline_all3.py
-I2CL/configs/config_baseline_all4.py
-I2CL/configs/config_baseline_all5.py
-I2CL/configs/config_baseline_all6.py
-I2CL/configs/config_baseline_task_vector2.py
-I2CL/scripts/run_baselines_all_extra2.sh
-I2CL/scripts/run_baselines_all_extra3.sh
-I2CL/scripts/run_baselines_all_extra4.sh
-I2CL/scripts/run_baselines_all_extra5.sh
-I2CL/scripts/run_baselines_all_extra6.sh
-I2CL/scripts/run_baselines_all2.sh
-I2CL/run_baselines_all_extra_corr.py
-I2CL/run_baselines_fv_corr.py
-I2CL/run_baselines_fv.py
-
-# 안쓰는 파일
-not_use
-function_vectors
-train_config
-ICL-State-Vector

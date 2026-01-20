@@ -220,6 +220,7 @@ class M2AdaptiveWrapper(M2Wrapper):
                 self.injected_deltas.append({
                     "batch_idx": i,
                     "position": label_pos[i].item(),
+                    "h": h_label.detach().cpu(),
                     "delta": delta.detach().cpu(),
                 })
 

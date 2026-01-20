@@ -317,6 +317,59 @@ def plot_loss_curve(loss_list, save_path):
     plt.close()
 
 
+def save_m2a_figures(h, delta, save_dir, prefix, add_permuted=True):
+    os.makedirs(save_dir, exist_ok=True)
+    h = h.detach().cpu().float()
+    delta = delta.detach().cpu().float()
+
+    pca_h = PCA(n_components=1).fit(h)
+    alpha = pca_h.transform(h).squeeze(1)
+    pca_delta_1 = PCA(n_components=1).fit(delta)
+    beta = pca_delta_1.transform(delta).squeeze(1)
+
+    plt.figure(figsize=(5, 4))
+    if add_permuted:
+        perm = torch.randperm(beta.numel())
+        plt.scatter(alpha.numpy(), beta[perm].numpy(), s=10, color="lightgray", alpha=0.4, label="permuted")
+    plt.scatter(alpha.numpy(), beta.numpy(), s=12, color="#1f77b4", alpha=0.8, label="paired")
+    plt.xlabel("alpha_i = <h_i, PC1_h>")
+    plt.ylabel("beta_i = <W h_i, PC1_delta>")
+    if add_permuted:
+        plt.legend(frameon=False)
+    plt.tight_layout()
+    plt.savefig(os.path.join(save_dir, f"{prefix}_fig1_input_pc1_vs_output_pc1.png"))
+    plt.close()
+
+    pca_delta_2 = PCA(n_components=2).fit(delta)
+    delta_pc = pca_delta_2.transform(delta)
+    plt.figure(figsize=(5, 4))
+    sc = plt.scatter(
+        delta_pc[:, 0].numpy(),
+        delta_pc[:, 1].numpy(),
+        c=alpha.numpy(),
+        cmap="viridis",
+        s=12,
+        alpha=0.85,
+    )
+    plt.xlabel("PC1(Delta)")
+    plt.ylabel("PC2(Delta)")
+    cbar = plt.colorbar(sc)
+    cbar.set_label("alpha_i (input PC1 score)")
+    plt.tight_layout()
+    plt.savefig(os.path.join(save_dir, f"{prefix}_fig2_delta_pca_colored_by_input_pc1.png"))
+    plt.close()
+
+    h_norm = torch.norm(h, dim=1)
+    delta_norm = torch.norm(delta, dim=1)
+    plt.figure(figsize=(5, 4))
+    plt.scatter(h_norm.numpy(), delta_norm.numpy(), s=12, alpha=0.8, color="#2ca02c")
+    plt.xlabel("||h_i||2")
+    plt.ylabel("||Delta_i||2 = ||W h_i||2")
+    plt.tight_layout()
+    plt.savefig(os.path.join(save_dir, f"{prefix}_fig3_norm_to_norm.png"))
+    plt.close()
+
+
 def svd_flip(u, v):
     # columns of u, rows of v
     max_abs_cols = torch.argmax(torch.abs(u), 0)
