@@ -1,3 +1,5 @@
+"""Model wrappers for extracting and injecting activations."""
+
 import math
 import numpy as np
 import random
@@ -8,29 +10,33 @@ import torch.nn.functional as F
 from contextlib import contextmanager
 from functools import reduce
 from peft import get_peft_model, PromptTuningConfig
+from typing import Any, Dict, Iterator, List, Optional
 
 import global_vars as gv
 import utils
 
 
 class ModelWrapper(nn.Module):
-    def __init__(self, model, tokenizer, model_config, device):
+    """Base wrapper that manages hooks and context vectors."""
+    def __init__(self, model: nn.Module, tokenizer: Any, model_config: Any, device: torch.device) -> None:
         super().__init__()
         self.model = model.eval()
         self.tokenizer = tokenizer
         self.model_config = model_config
         self.device = device
         self.num_layers = self._get_layer_num()
-        self.latent_dict = {}
-        self.linear_coef = None
-        self.inject_layers = None
+        self.latent_dict: Dict[int, Dict[str, torch.Tensor]] = {}
+        self.linear_coef: Optional[torch.Tensor] = None
+        self.inject_layers: Optional[List[int]] = None
         print(f"The model has {self.num_layers} layers:")
 
-    def reset_latent_dict(self):
+    def reset_latent_dict(self) -> None:
+        """Clear cached latent activations."""
         self.latent_dict = {}
 
     @contextmanager
-    def extract_latent(self):
+    def extract_latent(self) -> Iterator[None]:
+        """Register hooks to capture latent activations."""
         handles = []
         try:
             # attach hook
@@ -56,11 +62,12 @@ class ModelWrapper(nn.Module):
             for handle in handles:
                 handle.remove()
 
-    def extract_hook_func(self, layer_idx, target_module):
+    def extract_hook_func(self, layer_idx: int, target_module: str) -> Any:
+        """Build a forward hook to cache layer activations."""
         if layer_idx not in self.latent_dict:
             self.latent_dict[layer_idx] = {}
 
-        def hook_func(module, inputs, outputs):
+        def hook_func(module: Any, inputs: Any, outputs: Any) -> Any:
             if type(outputs) is tuple:
                 outputs = outputs[0]
             self.latent_dict[layer_idx][target_module] = outputs.detach().cpu()
@@ -68,7 +75,14 @@ class ModelWrapper(nn.Module):
         return hook_func
 
     @contextmanager
-    def inject_latent(self, context_vector_dict, config, linear_coef, train_mode=False):
+    def inject_latent(
+        self,
+        context_vector_dict: Dict[int, Dict[str, torch.Tensor]],
+        config: Dict[str, Any],
+        linear_coef: torch.Tensor,
+        train_mode: bool = False,
+    ) -> Iterator[None]:
+        """Register hooks to inject context vectors."""
         handles = []
         assert self.inject_layers is not None, "inject_layers is not set!"
         inject_method = config['inject_method']
@@ -97,10 +111,19 @@ class ModelWrapper(nn.Module):
             for handle in handles:
                 handle.remove()
 
-    def inject_hook_func(self, context_vector_container, strength, inject_method,
-                         add_noise, noise_scale, inject_pos, train_mode=False):
+    def inject_hook_func(
+        self,
+        context_vector_container: List[torch.Tensor],
+        strength: torch.Tensor,
+        inject_method: str,
+        add_noise: bool,
+        noise_scale: float,
+        inject_pos: str,
+        train_mode: bool = False,
+    ) -> Any:
+        """Build a forward hook that injects context vectors."""
 
-        def hook_func(module, inputs, outputs):
+        def hook_func(module: Any, inputs: Any, outputs: Any) -> Any:
             if type(outputs) is tuple:
                 output = outputs[0]
             else:
@@ -158,7 +181,13 @@ class ModelWrapper(nn.Module):
         return hook_func
 
     @contextmanager
-    def replace_latent(self, context_vector_dict, target_layers, config):
+    def replace_latent(
+        self,
+        context_vector_dict: Dict[int, Dict[str, torch.Tensor]],
+        target_layers: List[int],
+        config: Dict[str, Any],
+    ) -> Iterator[None]:
+        """Register hooks to replace activations with context vectors."""
         handles = []
         try:
             # attach hook
@@ -177,8 +206,9 @@ class ModelWrapper(nn.Module):
             for handle in handles:
                 handle.remove()
 
-    def replace_hook_func(self, context_vector_container):
-        def hook_func(module, inputs, outputs):
+    def replace_hook_func(self, context_vector_container: List[torch.Tensor]) -> Any:
+        """Build a forward hook that replaces activations."""
+        def hook_func(module: Any, inputs: Any, outputs: Any) -> Any:
             if type(outputs) is tuple:
                 output = outputs[0]
             else:
@@ -200,7 +230,12 @@ class ModelWrapper(nn.Module):
 
         return hook_func
 
-    def get_context_vector(self, all_latent_dicts, config):
+    def get_context_vector(
+        self,
+        all_latent_dicts: List[Dict[int, Dict[str, torch.Tensor]]],
+        config: Dict[str, Any],
+    ) -> Dict[int, Dict[str, torch.Tensor]]:
+        """Aggregate latent activations into context vectors."""
         if len(all_latent_dicts) == 1:
             latent_dict = all_latent_dicts[0]
             output_dict = {}
@@ -262,8 +297,15 @@ class ModelWrapper(nn.Module):
 
         return output_dict
 
-    def calibrate_strength(self, context_vector_dict, dataset, config,
-                           save_dir=None, run_name=None):
+    def calibrate_strength(
+        self,
+        context_vector_dict: Dict[int, Dict[str, torch.Tensor]],
+        dataset: Any,
+        config: Dict[str, Any],
+        save_dir: Optional[str] = None,
+        run_name: Optional[str] = None,
+    ) -> None:
+        """Optimize linear coefficients for injected vectors."""
         # prepare label dict          
         label_map = {}
         ans_txt_list = dataset.get_dmonstration_template()['options']
@@ -370,7 +412,14 @@ class ModelWrapper(nn.Module):
         # set model to eval mode
         self.model.eval()
 
-    def softprompt(self, config, dataset, save_dir=None, run_name=None):
+    def softprompt(
+        self,
+        config: Dict[str, Any],
+        dataset: Any,
+        save_dir: Optional[str] = None,
+        run_name: Optional[str] = None,
+    ) -> None:
+        """Train soft prompt parameters for the model."""
         pt_config = PromptTuningConfig(**config['pt_config'])
         peft_model = get_peft_model(self.model, pt_config)
 
@@ -466,7 +515,8 @@ class ModelWrapper(nn.Module):
         # plot loss curve and save it
         utils.plot_loss_curve(loss_list, save_dir + f'/{run_name}_loss_curve.png')
 
-    def init_strength(self, config, cali_train=None):
+    def init_strength(self, config: Dict[str, Any], cali_train: Optional[bool] = None) -> None:
+        """Initialize per-layer injection coefficients."""
         # get linear_coef size
         if type(config['layer']) == str:
             if config['layer'] == 'all':
@@ -506,7 +556,10 @@ class ModelWrapper(nn.Module):
         if not self.linear_coef.is_leaf:
             raise ValueError("linear_coef is not a leaf tensor, which is required for optimization.")
 
-    def init_noise_context_vector(self, context_vector_dict):
+    def init_noise_context_vector(
+        self, context_vector_dict: Dict[int, Dict[str, torch.Tensor]]
+    ) -> Dict[int, Dict[str, torch.Tensor]]:
+        """Initialize context vectors with random noise."""
         # init learnable context_vector
         for layer, sub_dict in context_vector_dict.items():
             for module, latent in sub_dict.items():
@@ -514,7 +567,8 @@ class ModelWrapper(nn.Module):
                 context_vector_dict[layer][module] = noise_vector
         return context_vector_dict
 
-    def _get_nested_attr(self, attr_path):
+    def _get_nested_attr(self, attr_path: str) -> Any:
+        """Resolve a dotted attribute path on the wrapped model."""
         """
         Accesses nested attributes of an object based on a dot-separated string path.
 
@@ -528,24 +582,29 @@ class ModelWrapper(nn.Module):
         except AttributeError:
             raise AttributeError(f"Attribute path '{attr_path}' not found.")
 
-    def _get_layer_num(self):
+    def _get_layer_num(self) -> int:
+        """Return number of transformer layers."""
         raise NotImplementedError("Please implement get_layer_num function for each model!")
 
-    def _get_arribute_path(self, layer_idx, target_module):
+    def _get_arribute_path(self, layer_idx: int, target_module: str) -> str:
+        """Return dotted attribute path for a module at a layer."""
         raise NotImplementedError("Please implement get_arribute_path function for each model!")
 
 
 class LlamaWrapper(ModelWrapper):
-    def __init__(self, model, tokenizer, model_config, device):
+    """Wrapper for Llama-family models."""
+    def __init__(self, model: nn.Module, tokenizer: Any, model_config: Any, device: torch.device) -> None:
         super().__init__(model, tokenizer, model_config, device)
         self.embed_matrix = self.model.model.embed_tokens.weight.data
         self.embed_dim = self.model_config.hidden_size
         self.last_norm = self.model.model.norm
 
-    def _get_layer_num(self):
+    def _get_layer_num(self) -> int:
+        """Return number of layers for Llama models."""
         return len(self.model.model.layers)
 
-    def _get_arribute_path(self, layer_idx, target_module):
+    def _get_arribute_path(self, layer_idx: int, target_module: str) -> str:
+        """Return module path for Llama layers."""
         if target_module == "attn":
             return f"model.layers.{layer_idx}.self_attn"
         elif target_module == "mlp":
@@ -557,16 +616,19 @@ class LlamaWrapper(ModelWrapper):
 
 
 class GPTWrapper(ModelWrapper):
-    def __init__(self, model, tokenizer, model_config, device):
+    """Wrapper for GPT-family models."""
+    def __init__(self, model: nn.Module, tokenizer: Any, model_config: Any, device: torch.device) -> None:
         super().__init__(model, tokenizer, model_config, device)
         self.embed_matrix = self.model.transformer.wte.weight.data
         self.embed_dim = self.embed_matrix.size(-1)
         self.last_norm = self.model.transformer.ln_f
 
-    def _get_layer_num(self):
+    def _get_layer_num(self) -> int:
+        """Return number of layers for GPT models."""
         return len(self.model.transformer.h)
 
-    def _get_arribute_path(self, layer_idx, target_module):
+    def _get_arribute_path(self, layer_idx: int, target_module: str) -> str:
+        """Return module path for GPT layers."""
         if target_module == "attn":
             return f"transformer.h.{layer_idx}.attn"
         elif target_module == "mlp":
@@ -578,7 +640,8 @@ class GPTWrapper(ModelWrapper):
 
 
 class Qwen3Wrapper(ModelWrapper):
-    def __init__(self, model, tokenizer, model_config, device):
+    """Wrapper for Qwen-family models."""
+    def __init__(self, model: nn.Module, tokenizer: Any, model_config: Any, device: torch.device) -> None:
         super().__init__(model, tokenizer, model_config, device)
         
         self.model = model
@@ -589,12 +652,14 @@ class Qwen3Wrapper(ModelWrapper):
         self.embed_dim = model_config.hidden_size
         self.last_norm = base.model.norm if hasattr(base, "model") else base.norm
         
-    def _get_layer_num(self):
+    def _get_layer_num(self) -> int:
+        """Return number of layers for Qwen models."""
         # always refer to base model layers
         base = self.model.get_base_model() if hasattr(self.model, "get_base_model") else self.model
         return len(base.model.layers)
 
-    def _get_arribute_path(self, layer_idx, target_module):
+    def _get_arribute_path(self, layer_idx: int, target_module: str) -> str:
+        """Return module path for Qwen layers."""
         if target_module == "attn":
             return f"model.layers.{layer_idx}.self_attn"
         elif target_module == "mlp":

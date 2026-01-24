@@ -10,6 +10,5 @@ config['bs'] = 1  # batch size
 config['run_num'] = 5
 config['seed'] = 42
 
-# M2-Adaptive analysis figures
-config['save_m2a_figures'] = True
-config['plot_permuted_control'] = True
+# Run LTV (adaptive task vector)
+config['run_ltv'] = True

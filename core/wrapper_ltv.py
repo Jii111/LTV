@@ -15,7 +15,7 @@ Hooking: we inject at the last decoder layer output (label position only) via fo
 """
 
 from contextlib import contextmanager
-from typing import List, Optional
+from typing import Any, List, Optional, Iterator
 
 import torch
 from tqdm import tqdm
@@ -26,9 +26,9 @@ from wrapper import Qwen3Wrapper
 
 
 class M2Wrapper(Qwen3Wrapper):
-    """Final-layer constant task vector."""
+    """Final-layer constant task vector wrapper."""
 
-    def __init__(self, model, tokenizer, model_config, device):
+    def __init__(self, model, tokenizer, model_config, device) -> None:
         super().__init__(model, tokenizer, model_config, device)
         self.task_vector: Optional[torch.Tensor] = None  # Δ̄ (d,)
 
@@ -41,6 +41,7 @@ class M2Wrapper(Qwen3Wrapper):
         batch_size: int = 8,
         verbose: bool = True,
     ) -> torch.Tensor:
+        """Compute mean delta between ICL and zero-shot label states."""
         """
         Compute mean Δ = h_L^{ICL}(label) − h_L^{Zero}(label) over anchor queries.
         """
@@ -86,7 +87,8 @@ class M2Wrapper(Qwen3Wrapper):
 
     @contextmanager
     @torch.no_grad()
-    def inject_m2_task_vector(self, task_vector: Optional[torch.Tensor] = None):
+    def inject_m2_task_vector(self, task_vector: Optional[torch.Tensor] = None) -> Iterator[None]:
+        """Context manager to inject a constant task vector."""
         """
         Add constant Δ to label hidden at the last decoder layer.
         Assumes gv.ATTN_MASK_END is set before forward (Evaluator sets this).
@@ -101,7 +103,7 @@ class M2Wrapper(Qwen3Wrapper):
         layer_module = self._get_nested_attr(self._get_arribute_path(layer_idx, "hidden"))
         handles = []
 
-        def hook(module, inputs, outputs):
+        def hook(module: Any, inputs: Any, outputs: Any) -> Any:
             hidden = outputs[0] if isinstance(outputs, tuple) else outputs
             batch_size = hidden.size(0)
             label_pos = gv.ATTN_MASK_END.to(hidden.device)
@@ -118,10 +120,10 @@ class M2Wrapper(Qwen3Wrapper):
                 h.remove()
 
 
-class M2AdaptiveWrapper(M2Wrapper):
+class LTVWrapper(M2Wrapper):
     """Final-layer adaptive task vector with closed-form ridge regression."""
 
-    def __init__(self, model, tokenizer, model_config, device):
+    def __init__(self, model, tokenizer, model_config, device) -> None:
         super().__init__(model, tokenizer, model_config, device)
         self.adaptive_matrix: Optional[torch.Tensor] = None  # W (d, d)
 
@@ -135,6 +137,7 @@ class M2AdaptiveWrapper(M2Wrapper):
         ridge_lambda: float = 0.01,
         verbose: bool = True,
     ) -> torch.Tensor:
+        """Fit an adaptive matrix W for query-conditioned deltas."""
         """
         Fit W so that Δ ≈ W · h_zero(label) using closed-form ridge regression.
         """
@@ -193,7 +196,8 @@ class M2AdaptiveWrapper(M2Wrapper):
 
     @contextmanager
     @torch.no_grad()
-    def inject_adaptive_task_vector(self, adaptive_matrix: Optional[torch.Tensor] = None):
+    def inject_adaptive_task_vector(self, adaptive_matrix: Optional[torch.Tensor] = None) -> Iterator[None]:
+        """Context manager to inject adaptive task vectors."""
         """
         Add W · h_zero(label) to label hidden at the last decoder layer.
         """
@@ -208,7 +212,7 @@ class M2AdaptiveWrapper(M2Wrapper):
         handles = []
         self.injected_deltas = []
 
-        def hook(module, inputs, outputs):
+        def hook(module: Any, inputs: Any, outputs: Any) -> Any:
             hidden = outputs[0] if isinstance(outputs, tuple) else outputs
             batch_size = hidden.size(0)
             label_pos = gv.ATTN_MASK_END.to(hidden.device)

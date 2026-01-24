@@ -8,12 +8,11 @@ Provides:
 4. Feature normalization utilities
 """
 
-from typing import Dict, List
+from typing import Any, Dict, Iterator, List
 
 import numpy as np
 import torch
 import torch.nn.functional as F
-
 
 def ridge_regression(
         targets: torch.Tensor,
@@ -109,7 +108,7 @@ def extract_label_position_hidden(
 def compute_demo_end_positions(
         demo_text: str,
         queries: List[str],
-        tokenizer
+        tokenizer: Any
 ) -> torch.Tensor:
     """
     Compute the end position of demo tokens for each [demo, query] concatenation.
@@ -207,10 +206,10 @@ def compute_reconstruction_error(
 
 
 def batch_iterator(
-        data: List,
+        data: List[Any],
         batch_size: int,
         shuffle: bool = False
-):
+) -> Iterator[List[Any]]:
     """
     Create batches from a list of data.
 
@@ -237,7 +236,7 @@ def batch_iterator(
 def save_task_vectors(
         task_vectors: Dict[int, torch.Tensor],
         save_path: str
-):
+) -> None:
     """
     Save task vectors to disk.
 
@@ -273,7 +272,7 @@ def load_task_vectors(
 def analyze_task_vectors(
         task_vectors: Dict[int, torch.Tensor],
         method: str = 'M2'
-) -> Dict[str, any]:
+) -> Dict[str, Any]:
     """
     Analyze task vector statistics.
 
@@ -315,7 +314,7 @@ def visualize_task_vector_norms(
         task_vectors: Dict[int, torch.Tensor],
         save_path: str,
         method: str = 'M2'
-):
+) -> None:
     """
     Visualize task vector norms across layers.
 

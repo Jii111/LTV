@@ -1,26 +1,37 @@
+"""Evaluation utilities for classification-style ICL experiments."""
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from tqdm import tqdm
+from typing import Any, Dict, List, Optional, Tuple
 
 import global_vars as gv
 import utils
 import pandas as pd
 
-from fv_utils.intervention_utils import *
-from sv_utils.TVframework import SVEvaluator
-
 class Evaluator(nn.Module):
+    """Batch evaluator for text classification tasks."""
 
-    def __init__(self, dataset, batch_size):
+    def __init__(self, dataset: Any, batch_size: int) -> None:
         super().__init__()
         self.dataset = dataset
         self.batch_size = batch_size
 
-    def evaluate(self, model_wrapper, tokenizer, demonstration='', use_cache=False, return_logits=False, 
-                 return_head_outputs=False, fv_vector=None, sv_logit=None, edit_layer=None, model_config=None,
-                 return_q_states=False): 
-
+    def evaluate(
+        self,
+        model_wrapper: Any,
+        tokenizer: Any,
+        demonstration: str = '',
+        use_cache: bool = False,
+        return_logits: bool = False,
+        return_head_outputs: bool = False,
+        fv_vector: Optional[torch.Tensor] = None,
+        sv_logit: Optional[torch.Tensor] = None,
+        edit_layer: Optional[int] = None,
+        model_config: Optional[Any] = None,
+        return_q_states: bool = False,
+    ):
+        """Evaluate a model wrapper on the dataset."""
         return self._evaluate_text_classification_batch(
             model_wrapper, tokenizer,
             demonstration, use_cache=use_cache, return_logits=return_logits,
@@ -28,22 +39,24 @@ class Evaluator(nn.Module):
             return_q_states=return_q_states
         )  
         
-    def _evaluate_text_classification_batch(self, model_wrapper, tokenizer,
-                                            demonstration, use_cache=False, return_logits=False, 
-                                            fv_vector=None, sv_logit=None, edit_layer=None, model_config=None,
-                                            return_head_outputs=False, return_q_states=False):
+    def _evaluate_text_classification_batch(
+        self,
+        model_wrapper: Any,
+        tokenizer: Any,
+        demonstration: str,
+        use_cache: bool = False,
+        return_logits: bool = False,
+        fv_vector: Optional[torch.Tensor] = None,
+        sv_logit: Optional[torch.Tensor] = None,
+        edit_layer: Optional[int] = None,
+        model_config: Optional[Any] = None,
+        return_head_outputs: bool = False,
+        return_q_states: bool = False,
+    ):
+        """Run batched evaluation and collect logits."""
 
         model = model_wrapper.model
-
-        # ======================================================
-        # 1. Prepare label tokens
-        # ======================================================
         all_base_logits = []
-        label_info = self.get_label_info(tokenizer)
-
-        # ======================================================
-        # 2. Prepare data
-        # ======================================================
         all_inputs, all_labels = [], []
         for data in self.dataset.all_data:
             ques_str, _, label = self.dataset.apply_template(data)
@@ -53,9 +66,6 @@ class Evaluator(nn.Module):
 
         use_cache = False
 
-        # ======================================================
-        # 4. Evaluation loop
-        # ======================================================
         for batch_idx, i in enumerate(range(0, len(all_inputs), self.batch_size)):
             cur_inputs = all_inputs[i:i + self.batch_size]
 
@@ -66,48 +76,18 @@ class Evaluator(nn.Module):
             pred_loc = utils.last_one_indices(attn_mask).to(model.device)
             gv.ATTN_MASK_START = torch.zeros_like(pred_loc)
             gv.ATTN_MASK_END = pred_loc
-                        
-            if fv_vector is not None:
-                intervention_idx = -1
-                intervention_fn = add_function_vector(edit_layer, fv_vector.reshape(1, model_config.fv['resid_dim']), model.device, idx=intervention_idx)
-                with TraceDict(model, layers=model_config.fv['layer_hook_names'], edit_output=intervention_fn) as td:    
-                    output = model(input_ids=input_ids,attention_mask=attn_mask,
-                    use_cache=False,return_head_outputs=return_head_outputs,return_q_states=return_q_states)
-                logits = output.logits
-                
-            elif sv_logit is not None:                
-                logits = sv_logit
-                        
-            else:
-                output = model(input_ids=input_ids,attention_mask=attn_mask, 
-                    use_cache=False,return_head_outputs=return_head_outputs,return_q_states=return_q_states)
-                logits = output.logits
+                      
+            output = model(input_ids=input_ids,attention_mask=attn_mask, 
+                use_cache=False,return_head_outputs=return_head_outputs,return_q_states=return_q_states)
+            logits = output.logits
 
             base_logits = logits[torch.arange(logits.size(0)), pred_loc]
             all_base_logits.append(base_logits.detach().cpu())
-            
-            #log_probs = F.log_softmax(base_logits, dim=-1) 
-
-            # (A) space-token
-            #space_preds = log_probs[:, label_info['space_first']].argmax(dim=-1)
-            #space_logits = base_logits[:, label_info['space_first']]
-
-            # (B) semantic first token
-            #semantic_preds = log_probs[:, label_info['semantic_first']].argmax(dim=-1)
-            #semantic_logits = base_logits[:, label_info['semantic_first']]
-
-            #all_space_preds.extend(space_preds.cpu().tolist())
-            #all_semantic_preds.extend(semantic_preds.cpu().tolist())
-            #all_space_logits.append(space_logits.detach().cpu())
-            #all_semantic_logits.append(semantic_logits.detach().cpu())
 
             del logits
             torch.cuda.empty_cache()
-
-        print("[DEBUG] : ", torch.cat(all_base_logits, dim=0).shape)
         
         if return_logits:
-            #all_pred_logits = torch.cat(final_logits, dim=0)
             metrics, all_pred_logits = self.evaluate_logits(
                 all_base_logits, all_labels, tokenizer, model_wrapper.model.config._name_or_path, return_logits=return_logits)
             return metrics, all_pred_logits, all_labels
@@ -115,7 +95,15 @@ class Evaluator(nn.Module):
             metrics = self.evaluate_logits(all_base_logits, all_labels, tokenizer, model_wrapper.model.config._name_or_path, return_logits=return_logits)
             return metrics
         
-    def evaluate_logits(self, base_logits, labels, tokenizer, model_name, return_logits=False):
+    def evaluate_logits(
+        self,
+        base_logits: List[torch.Tensor],
+        labels: List[int],
+        tokenizer: Any,
+        model_name: str,
+        return_logits: bool = False,
+    ):
+      """Compute metrics from collected logits."""
       label_info = self.get_label_info(tokenizer)
 
       logits = torch.cat(base_logits, dim=0)    # (N, V)
@@ -127,39 +115,18 @@ class Evaluator(nn.Module):
       semantic_preds = log_probs[:, label_info["semantic_first"]].argmax(dim=-1)
       semantic_logits = logits[:, label_info["semantic_first"]]
 
-      # ===== debug/print =====
-      print("\n[DEBUG] Space-token prediction count")
-      print(pd.Series(space_preds.cpu().tolist()).value_counts().sort_index())
-      print("\n[DEBUG] No-space first-token prediction count")
-      print(pd.Series(semantic_preds.cpu().tolist()).value_counts().sort_index())
-      print("\n[DEBUG] Ground-truth label count")
-      print(pd.Series(labels).value_counts().sort_index())
-
-      acc_space = (space_preds.cpu() == torch.tensor(labels)).float().mean().item()
-      acc_first = (semantic_preds.cpu() == torch.tensor(labels)).float().mean().item()
-
-      print("=" * 60)
-      print(f"[ACC] space-token      : {acc_space:.4f}")
-      print(f"[ACC] semantic first  : {acc_first:.4f}")
-      print("=" * 60)
-
-      # ===== final choice =====
       if "llama-2" in model_name.lower():
           pred_strategy = "first semantic"
           final_preds = semantic_preds.cpu().tolist()
           final_logits = semantic_logits.cpu()
           for i, text in enumerate(label_info["ans_txt_list"]):
               tok = tokenizer.convert_ids_to_tokens([label_info["semantic_first"][i]])[0]
-              print("[Double Check] used label")
-              print(f"[{label_info['label_id'][i]}] {text:<10} | token_id = {label_info['semantic_first'][i]:<6} | token = {tok}")
       else:
           pred_strategy = "space"
           final_preds = space_preds.cpu().tolist()
           final_logits = space_logits.cpu()
           for i, text in enumerate(label_info["ans_txt_list"]):
               tok = tokenizer.convert_ids_to_tokens([label_info["space_first"][i]])[0]
-              print("[Double Check] used label")
-              print(f"[{label_info['label_id'][i]}] {text:<10} | token_id = {label_info['space_first'][i]:<6} | token = {tok}")
 
       metrics = self.compute_performance(final_preds, labels)
       metrics["pred_strategy"] = pred_strategy
@@ -168,7 +135,8 @@ class Evaluator(nn.Module):
           return metrics, final_logits
       return metrics
 
-    def compute_performance(self, predictions, answers):
+    def compute_performance(self, predictions: List[int], answers: List[int]) -> Dict[str, float]:
+        """Compute accuracy and macro-F1 for predictions."""
         
         num_classes = self.dataset.class_num
         TP = [0] * num_classes
@@ -194,7 +162,8 @@ class Evaluator(nn.Module):
         metrics = {"acc": acc, "macro_f1": macro_f1}
         return metrics
     
-    def get_label_info(self, tokenizer):
+    def get_label_info(self, tokenizer: Any) -> Dict[str, Any]:
+        """Build label token mappings for the dataset."""
         ans_txt_list = self.dataset.get_dmonstration_template()['options']
 
         space_first = []
