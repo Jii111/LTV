@@ -53,7 +53,7 @@ def main(args):
     cfg = args.config
     run_num = cfg['run_num']
     seed = cfg['seed']
-    shot_per_class = cfg['shot_per_class']
+    num_shot = cfg['num_shot']
     use_cache = cfg['use_cache']
     return_logits = cfg['return_logits']
     extraction_batch_size = cfg['extraction_batch_size']
@@ -83,7 +83,7 @@ def main(args):
         seed=seed
         )
 
-    args.shot_num = shot_per_class
+    args.shot_num = num_shot
     
     model, tokenizer, model_config = utils.load_model_tokenizer(
             args.model_name, args.device, output_hidden_states=True
