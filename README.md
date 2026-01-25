@@ -17,12 +17,12 @@ source .venv/bin/activate
 ## Experimental Setup
 ### Models
 We evaluate our method on these models:
-- `meta-llama/Llama-2-7b-hf`, `meta-llama/Llama-2-13b-hf`, `meta-llama/Llama-3.1-8B`
-- `Qwen/Qwen2.5-7B`, `Qwen/Qwen3-8B`
+- Llama Series: `meta-llama/Llama-2-7b-hf`, `meta-llama/Llama-2-13b-hf`, `meta-llama/Llama-3.1-8B`
+- Qwen Series: `Qwen/Qwen2.5-7B`, `Qwen/Qwen3-8B`
 
 ### Data
 The `./datasets` directory contains the benchmarks used in our experiments.
-(AGNEWS, DBPedia, HateSpeech18, MR, SST-2, SST-5, SUBJ, TREC)
+- AGNEWS, DBPedia, HateSpeech18, MR, SST-2, SST-5, SUBJ, TREC
 
 ### Environment
 For reproducibility, we report the hardware and software environment used in our study:
