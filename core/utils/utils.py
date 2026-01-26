@@ -10,7 +10,7 @@ import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-import wrapper
+from core import wrapper
 import our_datasets as md
 from transformers import BitsAndBytesConfig
 
