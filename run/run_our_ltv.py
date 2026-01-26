@@ -11,6 +11,7 @@ setup so every method uses exactly the same data slices.
 import argparse
 import copy
 import gc
+import itertools
 import json
 import os
 import time
