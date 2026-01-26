@@ -8,7 +8,6 @@ from .agnews import AGNews
 from .subj import Subj
 from .rotten_tomatoes import RottenTomatoes
 from .hate_speech18 import HateSpeech18
-from .emo import EMO
 
 
 target_datasets = {
@@ -20,7 +19,6 @@ target_datasets = {
     'subj': Subj,
     'mr': RottenTomatoes,
     'hate_speech18': HateSpeech18,
-    'emo': EMO,
 }
 
 dataset_dict = {}

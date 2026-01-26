@@ -13,7 +13,7 @@ from peft import get_peft_model, PromptTuningConfig
 from typing import Any, Dict, Iterator, List, Optional
 
 import global_vars as gv
-import utils
+from core.utils import utils
 
 
 class ModelWrapper(nn.Module):

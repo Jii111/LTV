@@ -6,7 +6,7 @@ import torch.nn.functional as F
 from typing import Any, Dict, List, Optional, Tuple
 
 import global_vars as gv
-import utils
+from core.utils import utils
 import pandas as pd
 
 class Evaluator(nn.Module):

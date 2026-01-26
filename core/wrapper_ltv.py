@@ -21,8 +21,8 @@ import torch
 from tqdm import tqdm
 
 import global_vars as gv
-import utils_method as um
-from wrapper import Qwen3Wrapper
+from core.utils import utils_method as um
+from core.wrapper import Qwen3Wrapper
 
 
 class M2Wrapper(Qwen3Wrapper):
