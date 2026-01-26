@@ -2,6 +2,7 @@ config = {}
 
 ### Main Configuration ###
 config['exp_name'] = 'exps/ltv'  
+config['gpus'] = ['0']
 config['models'] = ['meta-llama/Llama-3.1-8B'] # 'meta-llama/Llama-2-7b-hf', 'meta-llama/Llama-2-13b-hf', 'Qwen/Qwen3-8B', 'Qwen/Qwen2.5-7B'
 config['datasets'] = ['sst2','sst5','mr','subj','trec','hate_speech18','agnews','dbpedia'] 
 config['num_shot'] = 30 # number of shots (NOT per class)
