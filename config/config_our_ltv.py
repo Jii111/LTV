@@ -13,6 +13,7 @@ config['seed'] = 42
 
 # Run LTV (adaptive task vector)
 config['run_ltv'] = True
+config['run_ltv'] = True
 
 # Experiment settings
 config['return_logits'] = True
@@ -47,7 +48,7 @@ config['add_extra_query'] = True
 config['example_separator'] = '\n'
 
 # Evaluation settings
-config['compute_kl_divergence'] = True
+config['compute_d_NTP'] = True
 config['save_task_vectors'] = False
 config['evaluate_reconstruction'] = False  # Evaluate reconstruction quality on val set
 

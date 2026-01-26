@@ -21,7 +21,7 @@ We evaluate our method on these models:
 - Qwen Series: `Qwen/Qwen2.5-7B`, `Qwen/Qwen3-8B`
 
 ### Data
-The `./datasets` directory contains the benchmarks used in our experiments.
+The `./our_datasets` directory contains the benchmarks used in our experiments.
 - AGNEWS, DBPedia, HateSpeech18, MR, SST-2, SST-5, SUBJ, TREC
 
 ### Environment
