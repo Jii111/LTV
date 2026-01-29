@@ -22,7 +22,7 @@ from tqdm import tqdm
 
 import global_vars as gv
 from core.utils import utils_method as um
-from core.wrapper import Qwen3Wrapper
+from core.wrapper_base import Qwen3Wrapper
 
 
 class M2Wrapper(Qwen3Wrapper):

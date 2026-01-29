@@ -10,7 +10,7 @@ import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from core import wrapper
+from core import wrapper_base as wrapper
 import our_datasets as md
 from transformers import BitsAndBytesConfig
 
@@ -381,27 +381,6 @@ class TensorStrFinder:
             s_tensor in list_s_tensor]
         mask_tensor = functools.reduce(torch.logical_or, mask_tensor_list)
         return mask_tensor
-
-def compute_kl_divergence(logits_p: torch.Tensor, logits_q: torch.Tensor, is_qwen: bool = False) -> float:
-    """Compute per-sample KL divergence between two logit tensors."""
-    probs_p = F.softmax(logits_p, dim=-1)
-    probs_q = F.softmax(logits_q, dim=-1)
-
-    kl_elem = probs_p * (torch.log(probs_p) - torch.log(probs_q))
-    kl = kl_elem.sum(dim=-1).float()  # (num_test_query,)
-
-    valid = torch.isfinite(kl)
-    if valid.any():
-        kl_mean = kl[valid].mean()
-    else:
-        kl_mean = torch.tensor(float("nan"), device=kl.device)
-
-    q1, q2, q3 = torch.quantile(
-        kl[valid],
-        torch.tensor([0.25, 0.5, 0.75], device=kl.device)
-    )
-
-    return kl_mean.item()
     
 def nested_set(d: Dict[str, Any], keys: List[str], value: Any) -> None:
     """Set a nested dict value given a key path."""
