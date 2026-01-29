@@ -1,17 +1,6 @@
-*.png
-*.txt
-*.svg
-
-# Cache / Logs
 .log/
-I2CL/.log
-*.log
-**/.log/
-
+results/
 .cache/
 __pycache__/
-**/__pycache__/
 *.pyc
 checkpoints
-
-wandb

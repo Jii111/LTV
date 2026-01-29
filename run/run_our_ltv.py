@@ -21,6 +21,7 @@ import torch
 from tqdm import tqdm
 import our_datasets as md
 import core.evaluator as ev
+import core.metric as metric
 import core.utils.utils as utils
 import core.utils.utils_method as um
 from core.wrapper_ltv import LTVWrapper
@@ -38,7 +39,7 @@ def print_result(label: str, result) -> None:
     print(f"{label}: {result}\n")
 
 
-def init_result_dict() -> tuple[dict, dict]:
+def init_result_dict() -> dict:
     result_dict = {
         'demon': {},
         'test_result': {
@@ -46,8 +47,7 @@ def init_result_dict() -> tuple[dict, dict]:
         },
         'time': {'ltv': []}
     }
-    kl_dict = {'ltv': {}}
-    return result_dict, kl_dict
+    return result_dict
 
 @torch.no_grad()
 def main(args):
@@ -57,6 +57,8 @@ def main(args):
     num_shot = cfg['num_shot']
     use_cache = cfg['use_cache']
     return_logits = cfg['return_logits']
+    load_in_8bit = cfg['load_in_8bit']
+    save_logits = cfg.get('save_logits', False)
     extraction_batch_size = cfg['extraction_batch_size']
     ridge_lambdas = cfg['ridge_lambda']
     num_train_queries = cfg['num_train_queries']
@@ -71,12 +73,6 @@ def main(args):
         args.dataset_name, split='train', max_data_num=None,
         seed=seed
         )
-    val_dataset = md.get_dataset(
-        args.dataset_name, split='validation',
-        max_data_num=cfg['val_data_num'],
-        sample_mode=cfg['sample_method'],
-        seed=seed
-        )
     test_dataset = md.get_dataset(
         args.dataset_name, split='test',
         max_data_num=cfg['test_data_num'],
@@ -87,22 +83,18 @@ def main(args):
     args.shot_num = num_shot
     
     model, tokenizer, model_config = utils.load_model_tokenizer(
-            args.model_name, args.device, output_hidden_states=True
+            args.model_name, args.device, output_hidden_states=True, load_in_8bit=load_in_8bit
         )
 
     base_wrapper = utils.get_model_wrapper(
         args.model_name, model, tokenizer, model_config, args.device
     )
     
-    args.val_max_token = val_dataset.get_max_demonstration_token_length(tokenizer)
     args.test_max_token = test_dataset.get_max_demonstration_token_length(tokenizer)
-
-    # TODO: evaluator 정리
-    val_evaluator = ev.Evaluator(val_dataset, batch_size=cfg['bs'])
     test_evaluator = ev.Evaluator(test_dataset, batch_size=cfg['bs'])
      
 
-    result_dict, kl_dict = init_result_dict()
+    result_dict = init_result_dict()
 
     cv_save_dict = {}
 
@@ -116,7 +108,7 @@ def main(args):
         demon, split_demon, demon_indices = train_dataset.gen_few_shot_demonstration(
             tokenizer=tokenizer,
             shot_num=args.shot_num,
-            max_demonstration_tok_len=min(args.val_max_token, args.test_max_token),
+            max_demonstration_tok_len=args.test_max_token,
             add_extra_query=cfg['add_extra_query'],
             example_separator=cfg['example_separator'],
             return_data_index=True,
@@ -153,6 +145,15 @@ def main(args):
             )
             result_dict['test_result']['few_shot'].append(test_few)
             print_result("Test few-shot", test_few)
+            if save_logits and test_few_logits is not None:
+                safe_run = re.sub(r"[^A-Za-z0-9_.-]+", "_", args.run_name)
+                icl_dir = os.path.join(args.save_dir, "logits_icl")
+                os.makedirs(icl_dir, exist_ok=True)
+                icl_path = os.path.join(icl_dir, f"icl_{safe_run}.pt")
+                torch.save(
+                    {"logits": test_few_logits, "labels": test_few_labels},
+                    icl_path,
+                )
 
         if cfg['run_ltv']:
             ltv_test_dict = {}
@@ -180,6 +181,14 @@ def main(args):
                         ridge_lambda=ridge_lambda,
                         verbose=True
                     )
+                    if cfg.get('save_task_vectors', False):
+                        safe_run = re.sub(r"[^A-Za-z0-9_.-]+", "_", args.run_name)
+                        layer_idx = ltv_wrapper.num_layers - 1
+                        save_path = os.path.join(
+                            args.save_dir,
+                            f"task_vectors_run{safe_run}_{q_key}_{lam_key}.pt",
+                        )
+                        um.save_task_vectors({layer_idx: adaptive_vectors}, save_path)
 
                     print("LTV: evaluating...")
                     ltv_start = time.time()
@@ -190,31 +199,35 @@ def main(args):
                             return_logits=return_logits
                         )
                     ltv_end = time.time()
-                    utils.nested_set(ltv_test_dict, [q_key, lam_key], test_ltv)
+                    ltv_metrics = dict(test_ltv) if isinstance(test_ltv, dict) else {"result": test_ltv}
                     result_dict['time']['ltv'].append(ltv_end - ltv_start)
                     print_result("Test LTV", test_ltv)
 
-                    if cfg.get('compute_kl_divergence', False) and test_few_logits is not None:
-                        mean_kl_ltv = utils.compute_kl_divergence(
+                    if cfg.get('compute_d_NTP', False) and test_few_logits is not None:
+                        mean_d_NTP_ltv = metric.compute_d_NTP(
                             test_few_logits, test_ltv_logits, is_qwen='Qwen' in args.model_name
                         )
+                        ltv_metrics["d_NTP"] = mean_d_NTP_ltv
+                        ltv_metrics["labels"] = list(map(int, test_ltv_labels))
 
-                        utils.nested_set(kl_dict,
-                            ['ltv', args.run_name, q_key, lam_key],
-                            {"mean_kl": mean_kl_ltv,
-                            "labels": list(map(int, test_ltv_labels))})
+                    utils.nested_set(ltv_test_dict, [q_key, lam_key], ltv_metrics)
+                    if save_logits and test_ltv_logits is not None:
+                        safe_run = re.sub(r"[^A-Za-z0-9_.-]+", "_", args.run_name)
+                        tv_dir = os.path.join(args.save_dir, "logits_tv")
+                        os.makedirs(tv_dir, exist_ok=True)
+                        tv_path = os.path.join(tv_dir, f"tv_{safe_run}_{q_key}_{lam_key}.pt")
+                        torch.save(
+                            {"logits": test_ltv_logits, "labels": test_ltv_labels},
+                            tv_path,
+                        )
 
             result_dict['test_result']['ltv'].append(ltv_test_dict)
             del ltv_wrapper
             
     with open(os.path.join(args.save_dir, 'result_dict.json'), 'w') as f:
         json.dump(result_dict, f, indent=4)
-    if kl_dict['ltv']:
-        with open(os.path.join(args.save_dir, 'kl_divergence.json'), 'w') as f:
-            json.dump(kl_dict, f, indent=4)
-
     del base_wrapper, model, tokenizer
-    del train_dataset, val_dataset, test_dataset
+    del train_dataset, test_dataset
     gc.collect()
     torch.cuda.empty_cache()
 
@@ -254,7 +267,7 @@ def get_args():
     parser.add_argument("--example_separator", type=str, default="\n")
 
     # Evaluation
-    parser.add_argument("--compute_kl_divergence", type=bool, default=True)
+    parser.add_argument("--compute_d_NTP", type=bool, default=True)
     parser.add_argument("--save_task_vectors", type=bool, default=False)
     parser.add_argument("--evaluate_reconstruction", type=bool, default=False)    
     
