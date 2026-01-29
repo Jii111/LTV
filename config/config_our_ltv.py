@@ -8,11 +8,8 @@ config['datasets'] = ['sst2','sst5','mr','subj','trec','hate_speech18','agnews',
 config['num_shot'] = 30 # number of shots (NOT per class)
 config['bs'] = 16  # batch size
 
-config['run_num'] = 1
-config['seed'] = 42
-
 # Run LTV (adaptive task vector)
-config['run_ltv'] = True
+config['run_baseline'] = True
 config['run_ltv'] = True
 
 # Experiment settings
@@ -21,7 +18,6 @@ config['logits_mode'] = 'first'
 config['run_num'] = 5
 config['seed'] = 42
 config['demo_seed'] = 12
-config['run_baseline'] = True
 config['metric'] = 'acc'  # 'acc', 'macro_f1'
 config['load_in_8bit'] = True
 config['use_cache'] = False
