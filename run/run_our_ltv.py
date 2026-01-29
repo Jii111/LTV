@@ -151,7 +151,13 @@ def main(args):
                 os.makedirs(icl_dir, exist_ok=True)
                 icl_path = os.path.join(icl_dir, f"icl_{safe_run}.pt")
                 torch.save(
-                    {"logits": test_few_logits, "labels": test_few_labels},
+                    {
+                        "logits": test_few_logits,
+                        "labels": test_few_labels,
+                        "run_name": args.run_name,
+                        "model_name": args.model_name,
+                        "dataset_name": args.dataset_name,
+                    },
                     icl_path,
                 )
 
@@ -217,7 +223,15 @@ def main(args):
                         os.makedirs(tv_dir, exist_ok=True)
                         tv_path = os.path.join(tv_dir, f"tv_{safe_run}_{q_key}_{lam_key}.pt")
                         torch.save(
-                            {"logits": test_ltv_logits, "labels": test_ltv_labels},
+                            {
+                                "logits": test_ltv_logits,
+                                "labels": test_ltv_labels,
+                                "run_name": args.run_name,
+                                "model_name": args.model_name,
+                                "dataset_name": args.dataset_name,
+                                "q_key": q_key,
+                                "lam_key": lam_key,
+                            },
                             tv_path,
                         )
 
