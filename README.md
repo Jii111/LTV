@@ -50,7 +50,8 @@ The main execution script is `run/run_our_metric.sh`. It calls `run/run_our_metr
 ./run/run_our_metric.sh
 ```
 
-- **Key Parameters**(`config/config_our_metric.py`)
+You can configure the parameters in `config/config_our_metric.py`
+- **Key Parameters**
   - `result_dir` : base directory containing saved logits
 
 ### Method: LTV
@@ -60,7 +61,8 @@ The main execution script is `run/run_our_ltv.sh`. It calls `run/run_our_ltv.py`
 ./run/run_our_ltv.sh
 ```
 
-- **Key Parameters** (`config/config_our_ltv.py`)
+You can configure the parameters in `config/config_our_ltv.py`
+- **Key Parameters**
   - `num_shot` : number of shots (k), which ensures label balance by including the maximum possible examples per label without exceeding k
   - `num_train_queries` : number of training queries used to extract LTV
   - `ridge_lambda` : regularization strength for LTV
