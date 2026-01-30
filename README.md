@@ -1,14 +1,14 @@
 # Distributional Alignment as a Principle for Task Vectors in In-Context Learning
 
 This repository provides the official code and data for Distributional Alignment as a Principle for Task Vectors in In-Context Learning. 
-We posit that probabilistic alignment with ICL is a key desideratum for effective TV extraction methods, and accordingly propose d_NTP and Linear Task Vector (LTV).
+We posit that probabilistic alignment with ICL is a key desideratum for effective TV extraction methods, and accordingly propose **d_NTP** and **Linear Task Vector (LTV)**.
 
 ![d_NTP metric](assets/metric.png)
 
 - **d_NTP** is a metric that quantifies TV quality by measuring the discrepancy between the predictive distribution under TV-based inference and that under ICL-based inference, in terms of next-token probability (NTP).
 - Empirically, lower d_NTP correlates strongly with higher downstream performance, making it a reliable indicator of TV quality.
 
-![LTV method](assets/method.png)
+<img src="assets/method.png" alt="LTV method" width="800">
 
 - **Linear Task Vector (LTV)** employs a linear mapping that estimates the effect of demonstrations and uses the closed-form solution of a regression problem to extract task vectors.
 - LTV is designed to reduce dNTP, aligning TV inference with ICL.
