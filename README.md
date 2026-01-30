@@ -8,7 +8,7 @@ We posit that probabilistic alignment with ICL is a key desideratum for effectiv
 - **d_NTP** is a metric that quantifies TV quality by measuring the discrepancy between the predictive distribution under TV-based inference and that under ICL-based inference, in terms of next-token probability (NTP).
 - Empirically, lower d_NTP correlates strongly with higher downstream performance, making it a reliable indicator of TV quality.
 
-<img src="assets/method.png" alt="LTV method" width="800">
+<img src="assets/method.png" alt="LTV method" width="400">
 
 - **Linear Task Vector (LTV)** employs a linear mapping that estimates the effect of demonstrations and uses the closed-form solution of a regression problem to extract task vectors.
 - LTV is designed to reduce dNTP, aligning TV inference with ICL.
