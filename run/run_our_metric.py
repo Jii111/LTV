@@ -58,6 +58,7 @@ def main(args):
     plot_path = cfg.get('plot_path', os.path.join(save_dir, 'd_NTP.png'))
 
     os.makedirs(save_dir, exist_ok=True)
+    os.makedirs(os.path.dirname(plot_path), exist_ok=True)
 
     datasets_map = {ds: {method_name: []} for ds in datasets}
     result_dict = {

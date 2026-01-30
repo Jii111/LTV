@@ -91,4 +91,4 @@ def plot_d_NTP(
     plt.savefig(save_path, dpi=300)
     plt.show()
     plt.close()
-    print("Saved bar plot in ", save_path)
+    return
