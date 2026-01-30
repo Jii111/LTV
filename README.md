@@ -5,7 +5,7 @@ This repository contains the official implementation of the metric and method pr
 ## Overview
 We posit that **probabilistic alignment with ICL is a key desideratum** for effective task vector extraction methods, and accordingly propose **d<sub>NTP</sub>**, a metric of task vector, and **Linear Task Vector (LTV)**. The figure below provides an overview of LTV.
 <p align="center">
-  <img src="assets/method.png" alt="LTV method" width="780">
+  <img src="assets/method.png" alt="LTV method" width="800">
 </p>
 
 ## Installation
