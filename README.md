@@ -37,40 +37,37 @@ The `./our_datasets` directory contains the benchmarks used in our experiments.
 - AGNEWS, DBPedia, HateSpeech18, MR, SST-2, SST-5, SUBJ, TREC
 
 ### Environment
-For reproducibility, we report the hardware and software environment used in our study:
+For reproducibility, we report the hardware and software environment used in our study.
 - Python: 3.13.2 / CUDA: 12.2 / NVIDIA driver: 535.247.01
 - GPU: NVIDIA RTX 6000 Ada Generation (49140 MiB)
 
 ## Running Experiments
 
-### Metric (dNTP)
+### Metric: d<sub>NTP</sub>
 The main execution script is `run/run_our_metric.sh`. It calls `run/run_our_metric.py` with the config file.
 
 ```bash
 ./run/run_our_metric.sh
 ```
 
-#### Config: `config/config_our_metric.py`
+- **Config: `config/config_our_metric.py`**
+-- `result_dir` (base directory containing saved logits)
 
-Key parameters:
-- `result_dir` (base directory containing saved logits)
-
-### Method (LTV)
+### Method: LTV
 The main execution script is `run/run_our_ltv.sh`. It calls `run/run_our_ltv.py` with the config file.
 
 ```bash
 ./run/run_our_ltv.sh
 ```
 
-#### Config: `config/config_our_ltv.py`
-
-Key parameters:
-- `num_shot` (number of shots (k), which ensures label balance by including the maximum possible examples per label without exceeding k)
-- `run_baseline` (zero-shot/few-shot)
-- `run_ltv` (LTV task vector)
-- `num_train_queries` (number of training queries used to extract task vectors)
-- `ridge_lambda` (regularization strength for adaptive task vectors)
-- `save_logits` (save ICL/TV logits for metric evaluation)
+- **Config: `config/config_our_ltv.py`**
+-- `num_shot` (number of shots (k), which ensures label balance by including the maximum possible examples per label without exceeding k)
+-- `run_baseline` (zero-shot/few-shot)
+-- `run_ltv` (LTV task vector)
+-- `num_train_queries` (number of training queries used to extract task vectors)
+-- `ridge_lambda` (regularization strength for adaptive task vectors)
+-- `compute_d_NTP` (compute our metric d<sub>NTP</sub>)
+-- `save_logits` (save ICL/TV logits)
 
 ## Acknowledgments
 We gratefully acknowledge the following repositories, which served as the foundation for this work:
