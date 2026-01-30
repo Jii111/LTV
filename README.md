@@ -7,7 +7,7 @@ We posit that probabilistic alignment with ICL is a key desideratum for effectiv
 
 ### d_NTP
 <p align="center">
-  <img src="assets/metric.png" alt="d_NTP metric" width="550">
+  <img src="assets/metric.png" alt="d_NTP metric" width="450">
 </p>
 - A metric that quantifies Task Vector quality by measuring the **discrepancy between the predictive distribution under TV-based inference and that under ICL-based inference**, in terms of next-token probability (NTP).
 - Empirically, lower d_NTP correlates strongly with higher downstream performance, making it a reliable indicator of TV quality.
