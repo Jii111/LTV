@@ -41,7 +41,6 @@ def print_result(label: str, result) -> None:
 
 def init_result_dict() -> dict:
     result_dict = {
-        'demon': {},
         'test_result': {
             'zero_shot': [], 'few_shot': [], 'ltv': []
         },
@@ -122,8 +121,6 @@ def main(args):
         else:
             baseline_demon = demon
 
-        result_dict['demon'][args.run_name] = demon
-
         # Zero-shot baseline
         if run_id == 0 and cfg['run_baseline']:
             print("Evaluating zero-shot baseline...")
@@ -150,10 +147,10 @@ def main(args):
                 icl_dir = os.path.join(args.save_dir, "logits_icl")
                 os.makedirs(icl_dir, exist_ok=True)
                 icl_path = os.path.join(icl_dir, f"icl_{safe_run}.pt")
+                print("DEBUG : ", test_few_logits.shape)
                 torch.save(
                     {
                         "logits": test_few_logits,
-                        "labels": test_few_labels,
                         "run_name": args.run_name,
                         "model_name": args.model_name,
                         "dataset_name": args.dataset_name,
@@ -209,12 +206,11 @@ def main(args):
                     result_dict['time']['ltv'].append(ltv_end - ltv_start)
                     print_result("Test LTV", test_ltv)
 
-                    if cfg.get('compute_d_NTP', False) and test_few_logits is not None:
+                    if cfg.get('compute_d_NTP', False) and test_few_labels==test_ltv_labels:
                         mean_d_NTP_ltv = metric.compute_d_NTP(
                             test_few_logits, test_ltv_logits, is_qwen='Qwen' in args.model_name
                         )
                         ltv_metrics["d_NTP"] = mean_d_NTP_ltv
-                        ltv_metrics["labels"] = list(map(int, test_ltv_labels))
 
                     utils.nested_set(ltv_test_dict, [q_key, lam_key], ltv_metrics)
                     if save_logits and test_ltv_logits is not None:
@@ -225,7 +221,6 @@ def main(args):
                         torch.save(
                             {
                                 "logits": test_ltv_logits,
-                                "labels": test_ltv_labels,
                                 "run_name": args.run_name,
                                 "model_name": args.model_name,
                                 "dataset_name": args.dataset_name,

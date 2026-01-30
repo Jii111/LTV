@@ -39,13 +39,13 @@ def compute_d_NTP(
 
 def plot_d_NTP(
     datasets_map: Dict[str, Dict[str, List[float]]],
-    dataset_order: List[str],
     save_path: str,
 ) -> None:
     """Plot and save log-scale d_NTP bar chart."""
     methods = ["Ours"]
     legend_labels = {"Ours": "LTV(Ours)"}
     xtick_labels = ["AGNews", "DBPedia", "HateSpeech18", "MR", "SST-2", "SST-5", "Subj", "TREC"]
+    dataset_order = ['agnews','dbpedia','hate_speech18','mr','sst2','sst5','subj','trec']
     colors = {"Ours": "#4C78A8"}
 
     x = np.arange(len(dataset_order))

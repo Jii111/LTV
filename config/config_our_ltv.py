@@ -14,7 +14,7 @@ config['run_ltv'] = True
 
 # Experiment settings
 config['return_logits'] = True
-config['run_num'] = 5
+config['run_num'] = 1
 config['seed'] = 42
 config['demo_seed'] = 12
 config['load_in_8bit'] = True
@@ -36,3 +36,4 @@ config['num_train_queries'] = [256]  # Number of training queries for task vecto
 config['ridge_lambda'] = [5.0] 
 config['extraction_batch_size'] = 1
 config['save_task_vectors'] = False
+config['save_logits'] = True

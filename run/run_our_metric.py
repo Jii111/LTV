@@ -41,23 +41,22 @@ def main(args):
 
     model_name = cfg['model_name']
     datasets = cfg['datasets']
-    dataset_order = cfg.get('dataset_order', datasets)
     method_name = cfg.get('method_name', 'Ours')
-    icl_tpl = cfg['icl_logit_dir_tpl']
-    tv_tpl = cfg['tv_logit_dir_tpl']
-    save_dir = cfg.get('save_dir', 'results/metrics')
+    result_dir = cfg['result_dir']
+    save_dir = cfg.get('save_dir', os.path.join(result_dir,'metric_result'))
     plot_path = cfg.get('plot_path', os.path.join(save_dir, 'd_NTP.png'))
 
     os.makedirs(save_dir, exist_ok=True)
 
-    datasets_map = {ds: {method_name: []} for ds in dataset_order}
+    datasets_map = {ds: {method_name: []} for ds in datasets}
     result_dict = {'per_file': {}, 'summary': {}}
 
     is_qwen = 'qwen' in model_name.lower()
 
     for dataset in datasets:
-        icl_dir = icl_tpl.format(model=model_name, dataset=dataset)
-        tv_dir = tv_tpl.format(model=model_name, dataset=dataset)
+        icl_logit_dir_tpl = 'results/ltv/{model}/{dataset}/logits_icl'
+        icl_dir = os.path.join(result_dir,model_name, dataset,'logits_icl')
+        tv_dir = os.path.join(result_dir,model_name, dataset,'logits_tv')
 
         icl_map = collect_logits_map(icl_dir, prefix='icl_')
         tv_map = collect_logits_map(tv_dir, prefix='tv_')
@@ -80,7 +79,7 @@ def main(args):
                 'd_NTP': d_ntp,
                 'icl_file': icl_entry['file'],
                 'tv_file': tv_entry['file'],
-                'meta': tv_entry['meta'],
+                'meta': {k: v for k, v in tv_entry['meta'].items() if k not in ('logits', 'labels')}
             })
 
         if dataset in datasets_map:
@@ -94,7 +93,7 @@ def main(args):
     with open(result_path, 'w') as f:
         json.dump(result_dict, f, indent=4)
 
-    metric.plot_d_NTP(datasets_map, dataset_order, plot_path)
+    metric.plot_d_NTP(datasets_map, plot_path)
 
     print(f"Saved d_NTP results -> {result_path}")
     print(f"Saved plot -> {plot_path}")
