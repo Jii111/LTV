@@ -22,7 +22,7 @@ We posit that **probabilistic alignment with ICL is a key desideratum** for effe
 - `setup.sh` creates `.venv`, upgrades pip, and installs `requirements.txt`.
 - Run the setup script:
 ```bash
-./setup.sh
+bash ./setup.sh
 source .venv/bin/activate
 ```
 
@@ -47,7 +47,7 @@ For reproducibility, we report the hardware and software environment used in our
 The main execution script is `run/run_our_metric.sh`. It calls `run/run_our_metric.py` with the config file.
 
 ```bash
-./run/run_our_metric.sh
+bash ./run/run_our_metric.sh
 ```
 
 You can configure the parameters in `config/config_our_metric.py`
@@ -58,7 +58,7 @@ You can configure the parameters in `config/config_our_metric.py`
 The main execution script is `run/run_our_ltv.sh`. It calls `run/run_our_ltv.py` with the config file.
 
 ```bash
-./run/run_our_ltv.sh
+bash ./run/run_our_ltv.sh
 ```
 
 You can configure the parameters in `config/config_our_ltv.py`
