@@ -4,8 +4,8 @@ Unified baseline runner that evaluates:
 2. Few-shot ICL
 3. LTV (adaptive task vector)
 
-Sampling (train/val/test splits + demonstrations) follows the I2CL/task-vector
-setup so every method uses exactly the same data slices.
+Sampling (train/test splits + demonstrations) follows the I2CL/task-vector
+setup so every method uses exactly the same data.
 """
 
 import argparse
