@@ -5,15 +5,16 @@ This repository provides the official code and data for Distributional Alignment
 ## Overview
 We posit that probabilistic alignment with ICL is a key desideratum for effective TV extraction methods, and accordingly propose **d_NTP** and **Linear Task Vector (LTV)**.
 
-- **d_NTP** 
--- A metric that quantifies TV quality by measuring the discrepancy between the predictive distribution under TV-based inference and that under ICL-based inference, in terms of next-token probability (NTP).
--- Empirically, lower d_NTP correlates strongly with higher downstream performance, making it a reliable indicator of TV quality.
+- **d_NTP**
+  - A metric that quantifies TV quality by measuring the discrepancy between the predictive distribution under TV-based inference and that under ICL-based inference, in terms of next-token probability (NTP).
+  - Empirically, lower d_NTP correlates strongly with higher downstream performance, making it a reliable indicator of TV quality.
 
-![LTV method](assets/method.png)
-
-- **Linear Task Vector (LTV)** 
--- It employs a linear mapping that estimates the effect of demonstrations and uses the closed-form solution of a regression problem to extract task vectors.
--- LTV is designed to reduce dNTP, aligning TV inference with ICL.
+- **Linear Task Vector (LTV)**
+<p align="center">
+  <img src="assets/method.png" alt="LTV method" width="700">
+</p>
+  - It employs a linear mapping that estimates the effect of demonstrations and uses the closed-form solution of a regression problem to extract task vectors.
+  - LTV is designed to reduce dNTP, aligning TV inference with ICL.
 
 ## Installation
 - `setup.sh` creates `.venv`, upgrades pip, and installs `requirements.txt`.
