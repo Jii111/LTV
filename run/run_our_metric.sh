@@ -28,12 +28,12 @@ echo "Command: ${CMD[*]}" | tee -a "$LOG_FILE"
 
 if "${CMD[@]}" 2>&1 | tee -a "$LOG_FILE"; then
   echo "==========================================" | tee -a "$LOG_FILE"
-  echo "✓ LTV run completed" | tee -a "$LOG_FILE"
+  echo "✓ d_NTP run completed" | tee -a "$LOG_FILE"
   echo "==========================================" | tee -a "$LOG_FILE"
 else
   echo "" | tee -a "$LOG_FILE"
   echo "==========================================" | tee -a "$LOG_FILE"
-  echo "✗ LTV run failed!" | tee -a "$LOG_FILE"
+  echo "✗ d_NTP run failed!" | tee -a "$LOG_FILE"
   echo "==========================================" | tee -a "$LOG_FILE"
   exit 1
 fi

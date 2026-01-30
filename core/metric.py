@@ -42,11 +42,15 @@ def plot_d_NTP(
     save_path: str,
 ) -> None:
     """Plot and save log-scale d_NTP bar chart."""
-    methods = ["Ours"]
-    legend_labels = {"Ours": "LTV(Ours)"}
-    xtick_labels = ["AGNews", "DBPedia", "HateSpeech18", "MR", "SST-2", "SST-5", "Subj", "TREC"]
-    dataset_order = ['agnews','dbpedia','hate_speech18','mr','sst2','sst5','subj','trec']
-    colors = {"Ours": "#4C78A8"}
+    if not datasets_map:
+        print("No data to plot.")
+        return
+
+    dataset_order = list(datasets_map.keys())
+    methods = sorted({m for ds in datasets_map.values() for m in ds.keys()}) or ["Ours"]
+    legend_labels = {}
+    xtick_labels = dataset_order
+    colors = {"Ours": "#4C78A8", "LTV": "#4C78A8"}
 
     x = np.arange(len(dataset_order))
     width = 0.5
@@ -70,11 +74,11 @@ def plot_d_NTP(
             x + (i - 0) * width,
             vals,
             width=width,
-            color=colors[m],
+            color=colors.get(m, "#4C78A8"),
             alpha=0.9,
             edgecolor="black",
             linewidth=0.5,
-            label=legend_labels[m],
+            label=legend_labels.get(m, m),
         )
 
     plt.yscale("log")

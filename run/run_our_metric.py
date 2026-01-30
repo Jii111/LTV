@@ -43,13 +43,13 @@ def main(args):
     datasets = cfg['datasets']
     method_name = cfg.get('method_name', 'Ours')
     result_dir = cfg['result_dir']
-    save_dir = cfg.get('save_dir', os.path.join(result_dir,'metric_result'))
+    save_dir = cfg.get('save_dir', os.path.join(result_dir, model_name))
     plot_path = cfg.get('plot_path', os.path.join(save_dir, 'd_NTP.png'))
 
     os.makedirs(save_dir, exist_ok=True)
 
     datasets_map = {ds: {method_name: []} for ds in datasets}
-    result_dict = {'per_file': {}, 'summary': {}}
+    result_dict = {'dataset_results': {}}
 
     is_qwen = 'qwen' in model_name.lower()
 
@@ -61,8 +61,8 @@ def main(args):
         icl_map = collect_logits_map(icl_dir, prefix='icl_')
         tv_map = collect_logits_map(tv_dir, prefix='tv_')
 
-        if dataset not in result_dict['per_file']:
-            result_dict['per_file'][dataset] = []
+        if dataset not in result_dict['dataset_results']:
+            result_dict['dataset_results'][dataset] = []
 
         for run_name, tv_entry in tv_map.items():
             icl_entry = icl_map.get(run_name)
@@ -74,20 +74,13 @@ def main(args):
             )
 
             datasets_map.setdefault(dataset, {}).setdefault(method_name, []).append(d_ntp)
-            result_dict['per_file'][dataset].append({
+            result_dict['dataset_results'][dataset].append({
                 'run_name': run_name,
                 'd_NTP': d_ntp,
                 'icl_file': icl_entry['file'],
                 'tv_file': tv_entry['file'],
                 'meta': {k: v for k, v in tv_entry['meta'].items() if k not in ('logits', 'labels')}
             })
-
-        if dataset in datasets_map:
-            vals = datasets_map[dataset].get(method_name, [])
-            result_dict['summary'][dataset] = {
-                'count': len(vals),
-                'mean_d_NTP': float(sum(vals) / len(vals)) if vals else None,
-            }
 
     result_path = os.path.join(save_dir, 'd_NTP_result.json')
     with open(result_path, 'w') as f:
