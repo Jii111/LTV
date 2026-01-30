@@ -82,18 +82,11 @@ def plot_d_NTP(
         )
 
     plt.yscale("log")
+    plt.title("Comparison of d_NTP", fontsize=18)
     plt.xticks(x, xtick_labels, fontsize=18)
     plt.yticks(fontsize=18)
     plt.xlim(x[0] - 0.6, x[-1] + 0.6)
-    plt.tight_layout(rect=[0, 0.15, 1, 1])
-
-    plt.legend(
-        ncol=5,
-        fontsize=18,
-        loc="lower center",
-        bbox_to_anchor=(0.5, -0.8),
-    )
-
+    plt.legend(fontsize=16, loc="upper right")
     plt.tight_layout()
     plt.savefig(save_path, dpi=300)
     plt.show()
