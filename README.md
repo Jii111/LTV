@@ -6,7 +6,7 @@ This repository provides the official code and data for Distributional Alignment
 We posit that probabilistic alignment with ICL is a key desideratum for effective TV extraction methods, and accordingly propose **d_NTP** and **Linear Task Vector (LTV)**.
 
 <p align="center">
-    <img src="assets/metric.png" alt="d_NTP metric" width="500">
+    <img src="assets/metric.png" alt="d_NTP metric" width="550">
 </p>
 
 - **d_NTP** is a metric that quantifies TV quality by measuring the discrepancy between the predictive distribution under TV-based inference and that under ICL-based inference, in terms of next-token probability (NTP).
