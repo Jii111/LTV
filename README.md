@@ -1,9 +1,9 @@
-# Distributional Alignment as a Principle for Task Vectors in In-Context Learning
+# Distributional Alignment as a Principle for Designing Task Vectors in In-Context Learning
 
-This repository provides the official code and data for Distributional Alignment as a Principle for Task Vectors in In-Context Learning. 
+This repository provides the official code and data for Distributional Alignment as a Principle for Designing Task Vectors in In-Context Learning. 
 
 ## Overview
-We posit that probabilistic alignment with ICL is a key desideratum for effective TV extraction methods, and accordingly propose **d<sub>NTP</sub>** and **Linear Task Vector (LTV)**.
+We posit that **probabilistic alignment with ICL is a key desideratum** for effective TV extraction methods, and accordingly propose **d<sub>NTP</sub>** and **Linear Task Vector (LTV)**.
 
 ### Metric: d<sub>NTP</sub>
 - It quantifies Task Vector quality by measuring the **discrepancy between the predictive distribution under TV-based inference and that under ICL-based inference**, in terms of next-token probability (NTP).
@@ -11,7 +11,7 @@ We posit that probabilistic alignment with ICL is a key desideratum for effectiv
 
 ### Method: Linear Task Vector (LTV)
 <p align="center">
-  <img src="assets/method.png" alt="LTV method" width="750">
+  <img src="assets/method.png" alt="LTV method" width="780">
 </p>
 
 - It employs **a linear mapping that estimates the effect of demonstrations** and uses the closed-form solution of a regression problem to extract task vectors.
@@ -42,21 +42,35 @@ For reproducibility, we report the hardware and software environment used in our
 - GPU: NVIDIA RTX 6000 Ada Generation (49140 MiB)
 
 ## Running Experiments
+
+### Metric (dNTP)
+The main execution script is `run/run_our_metric.sh`. It calls `run/run_our_metric.py` with the config file.
+
+```bash
+./run/run_our_metric.sh
+```
+
+#### Config: `config/config_our_metric.py`
+
+Key parameters:
+- `result_dir` (base directory containing saved logits)
+
+### Method (LTV)
 The main execution script is `run/run_our_ltv.sh`. It calls `run/run_our_ltv.py` with the config file.
 
 ```bash
 ./run/run_our_ltv.sh
 ```
 
-### Config
-Adjust experiment settings in `config/config_our_ltv.py`
+#### Config: `config/config_our_ltv.py`
 
-Key parameters to check:
+Key parameters:
 - `num_shot` (number of shots (k), which ensures label balance by including the maximum possible examples per label without exceeding k)
 - `run_baseline` (zero-shot/few-shot)
 - `run_ltv` (LTV task vector)
 - `num_train_queries` (number of training queries used to extract task vectors)
 - `ridge_lambda` (regularization strength for adaptive task vectors)
+- `save_logits` (save ICL/TV logits for metric evaluation)
 
 ## Acknowledgments
 We gratefully acknowledge the following repositories, which served as the foundation for this work:
