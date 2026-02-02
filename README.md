@@ -2,11 +2,25 @@
 
 This repository contains the official implementation of the metric and method proposed in **Distributional Alignment as a Principle for Designing Task Vectors in In-Context Learning.**
 
-## Overview
+## Methodology Overview
 We posit that **probabilistic alignment with ICL is a key desideratum** for effective task vector extraction methods, and accordingly propose **d<sub>NTP</sub>**(`run/run_our_metric.sh`) and **Linear Task Vector (LTV)**(`run/run_our_ltv.sh`). The figure below provides an overview of LTV.
+
+### Metric: d<sub>NTP</sub>
+<p align="center">
+  <img src="assets/metric.png" alt="d_NTP method" width="500">
+</p>
+
+- It quantifies **Task Vector(TV) quality by measuring the discrepancy between the predictive distribution** under TV-based inference and that under ICL-based inference, in terms of next-token probability (NTP).
+- Empirically, lower d<sub>NTP</sub> correlates strongly with higher downstream performance, making it a reliable indicator of TV quality.
+
+### Method: Linear Task Vector (LTV)
 <p align="center">
   <img src="assets/method.png" alt="LTV method" width="800">
 </p>
+
+- At extraction, LTV employs a linear mapping that estimates the demonstration effects from zero-shot hidden states by solving a closed-form regression problem.
+- At inference, the task vector obtained by applying the optimal linear mapping to the zero-shot hidden state, then injected into the model.
+- LTV is designed to minimize d<sub>NTP</sub>, aligning TV inference with ICL.
 
 ## Installation
 - `setup.sh` creates `.venv`, upgrades pip, and installs `requirements.txt`.
