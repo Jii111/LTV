@@ -3,7 +3,7 @@
 This repository contains the official implementation of the metric and method proposed in **Distributional Alignment as a Principle for Designing Task Vectors in In-Context Learning.**
 
 ## Methodology Overview
-We posit that **probabilistic alignment with ICL is a key desideratum** for effective task vector extraction methods, and accordingly propose **d<sub>NTP</sub>** and **Linear Task Vector (LTV)**. The figure below provides an overview of LTV.
+We posit that **probabilistic alignment with ICL is a key desideratum** for effective task vector extraction methods, and accordingly propose **d<sub>NTP</sub>** and **Linear Task Vector (LTV)**.
 
 ### 1) Metric: d<sub>NTP</sub>
 <p align="center">
