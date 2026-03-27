@@ -24,7 +24,7 @@ echo "==========================================" | tee -a "$LOG_FILE"
 echo "Starting comparison experiment" | tee -a "$LOG_FILE"
 echo "==========================================" | tee -a "$LOG_FILE"
 
-CMD="cd $PROJECT_DIR && python run/run_comparison_exp.py --config_path $CONFIG_PATH"
+CMD="cd $PROJECT_DIR && python -m run.run_comparison_exp --config_path $CONFIG_PATH"
 echo "Command: $CMD" | tee -a "$LOG_FILE"
 echo "==========================================" | tee -a "$LOG_FILE"
 
