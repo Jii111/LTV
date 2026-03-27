@@ -370,11 +370,14 @@ def main(args):
                 print(f"[MLP {num_layers}L] Training...")
 
                 t0 = time.time()
-                mlp_model = run_mlp_training(
-                    mlp_features, mlp_targets,
-                    mlp_eval_features, mlp_eval_targets,
-                    icl_hidden.size(-1), num_layers, mlp_cfg, args.save_dir,
-                )
+                # main() runs under no_grad for inference-heavy sections,
+                # but MLP fitting needs autograd enabled.
+                with torch.enable_grad():
+                    mlp_model = run_mlp_training(
+                        mlp_features, mlp_targets,
+                        mlp_eval_features, mlp_eval_targets,
+                        icl_hidden.size(-1), num_layers, mlp_cfg, args.save_dir,
+                    )
                 train_time = time.time() - t0
 
                 mlp_model.eval()
