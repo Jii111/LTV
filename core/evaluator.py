@@ -77,8 +77,13 @@ class Evaluator(nn.Module):
             gv.ATTN_MASK_START = torch.zeros_like(pred_loc)
             gv.ATTN_MASK_END = pred_loc
                       
-            output = model(input_ids=input_ids,attention_mask=attn_mask, 
-                use_cache=False,return_head_outputs=return_head_outputs,return_q_states=return_q_states)
+            extra_kwargs = {}
+            if return_head_outputs:
+                extra_kwargs['return_head_outputs'] = True
+            if return_q_states:
+                extra_kwargs['return_q_states'] = True
+            output = model(input_ids=input_ids, attention_mask=attn_mask,
+                use_cache=False, **extra_kwargs)
             logits = output.logits
 
             base_logits = logits[torch.arange(logits.size(0)), pred_loc]
