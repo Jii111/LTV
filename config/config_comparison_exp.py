@@ -25,7 +25,7 @@ config['load_in_8bit'] = False
 # LTV extraction
 config['num_train_queries'] = 256
 config['ridge_lambda'] = 5.0
-config['extraction_batch_size'] = 8
+config['extraction_batch_size'] = 1
 
 # MLP comparison
 config['mlp_layers'] = [2, 4, 8, 16]
