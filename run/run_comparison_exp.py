@@ -129,6 +129,7 @@ def run_mlp_training(
         per_device_eval_batch_size=cfg['batch_size'],
         num_train_epochs=cfg['epochs'],
         learning_rate=cfg['lr'],
+        weight_decay=cfg.get('weight_decay', 0.0),
         warmup_ratio=cfg['warmup_ratio'],
         lr_scheduler_type="cosine",
         eval_strategy="steps",
@@ -369,6 +370,11 @@ def main(args):
                 key = f'mlp_{num_layers}layer'
                 print(f"[MLP {num_layers}L] Training...")
 
+                # Layer별 weight decay override
+                mlp_cfg_run = dict(mlp_cfg)
+                if 'weight_decay_per_layer' in mlp_cfg and num_layers in mlp_cfg['weight_decay_per_layer']:
+                    mlp_cfg_run['weight_decay'] = mlp_cfg['weight_decay_per_layer'][num_layers]
+
                 t0 = time.time()
                 # main() runs under no_grad for inference-heavy sections,
                 # but MLP fitting needs autograd enabled.
@@ -376,7 +382,7 @@ def main(args):
                     mlp_model = run_mlp_training(
                         mlp_features, mlp_targets,
                         mlp_eval_features, mlp_eval_targets,
-                        icl_hidden.size(-1), num_layers, mlp_cfg, args.save_dir,
+                        icl_hidden.size(-1), num_layers, mlp_cfg_run, args.save_dir,
                     )
                 train_time = time.time() - t0
 
@@ -446,6 +452,7 @@ def main(args):
                 run_result[key] = {
                     'acc': mlp_metrics.get('acc'),
                     'macro_f1': mlp_metrics.get('macro_f1'),
+                    'weight_decay': mlp_cfg_run.get('weight_decay', 0.0),
                     'data_collect_time_sec': round(data_collect_time, 3),
                     'train_time_sec': round(train_time, 3),
                     'infer_time_per_sample_sec': round(mlp_infer_time / num_test, 6),

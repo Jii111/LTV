@@ -37,4 +37,6 @@ config['mlp'] = {
     'lr': 1e-3,
     'warmup_ratio': 0.1,
     'eval_interval_epochs': 0.5,
+    'weight_decay': 0.01,
+    # 'weight_decay_per_layer': {2: 0.0, 4: 0.001, 8: 0.01, 16: 0.1},
 }
