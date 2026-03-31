@@ -54,21 +54,35 @@ class HiddenDeltaDataset(Dataset):
         }
 
 
+class ResidualBlock(nn.Module):
+    """Two-layer MLP block: Linear -> ReLU -> Linear."""
+
+    def __init__(self, dim: int):
+        super().__init__()
+        self.fc1 = nn.Linear(dim, dim)
+        self.relu = nn.ReLU()
+        self.fc2 = nn.Linear(dim, dim)
+
+    def forward(self, x):
+        return self.fc2(self.relu(self.fc1(x)))
+
+
 class M2MLP(nn.Module):
-    """Variable-depth square MLP with ReLU activations."""
+    """Variable-depth square MLP with residual connections and LayerNorm every 2 layers."""
 
     def __init__(self, dim: int, num_layers: int = 2):
         super().__init__()
         assert num_layers >= 2, "Must have at least 2 layers"
-        layers = []
-        for i in range(num_layers):
-            layers.append(nn.Linear(dim, dim))
-            if i < num_layers - 1:
-                layers.append(nn.ReLU())
-        self.mlp = nn.Sequential(*layers)
+        assert num_layers % 2 == 0, "num_layers must be even for residual blocks"
+        num_blocks = num_layers // 2
+        self.blocks = nn.ModuleList([ResidualBlock(dim) for _ in range(num_blocks)])
+        self.norms = nn.ModuleList([nn.LayerNorm(dim) for _ in range(num_blocks)])
 
     def forward(self, inputs=None, labels=None):
-        delta = self.mlp(inputs)
+        x = inputs
+        for block, norm in zip(self.blocks, self.norms):
+            x = norm(x + block(x))
+        delta = x
         loss = None
         if labels is not None:
             loss = F.mse_loss(delta, labels)
@@ -416,7 +430,7 @@ def main(args):
                     mlp_delta = []
                     bs = mlp_cfg['batch_size']
                     for i in range(0, mlp_zero_hidden.size(0), bs):
-                        batch_h = mlp_zero_hidden[i:i + bs].to(args.device, dtype=mlp_model.mlp[0].weight.dtype)
+                        batch_h = mlp_zero_hidden[i:i + bs].to(args.device, dtype=mlp_model.blocks[0].fc1.weight.dtype)
                         out = mlp_model(inputs=batch_h)
                         mlp_delta.append(out['logits'].cpu())
                     mlp_delta = torch.cat(mlp_delta, dim=0).float()
