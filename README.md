@@ -7,7 +7,7 @@ We posit that **probabilistic alignment with ICL is a key desideratum** for effe
 
 ### 1) Metric: d<sub>NTP</sub>
 <p align="center">
-  <img src="assets/metric.png" alt="d_NTP method" width="750">
+  <img src="assets/metric.png" alt="d_NTP method" width="730">
 </p>
 
 - It quantifies **task vector quality by measuring the discrepancy between the predictive distribution** under TV-based inference and that under ICL-based inference, in terms of next-token probability (NTP).
@@ -15,7 +15,7 @@ We posit that **probabilistic alignment with ICL is a key desideratum** for effe
 
 ### 2) Method: Linear Task Vector (LTV)
 <p align="center">
-  <img src="assets/method.png" alt="LTV method" width="750">
+  <img src="assets/method.png" alt="LTV method" width="760">
 </p>
 
 - At extraction, LTV employs **a linear mapping that transforms zero-shot hidden states into estimated demonstration effects** via a closed-form ridge regression.
