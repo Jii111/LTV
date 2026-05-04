@@ -15,7 +15,7 @@ We posit that **probabilistic alignment with ICL is a key desideratum** for effe
 
 ### 2) Method: Linear Task Vector (LTV)
 <p align="center">
-  <img src="assets/method.png" alt="LTV method" width="760">
+  <img src="assets/method.png" alt="LTV method" width="780">
 </p>
 
 - At extraction, LTV employs **a linear mapping that transforms zero-shot hidden states into estimated demonstration effects** via a closed-form ridge regression.
