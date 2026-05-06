@@ -43,7 +43,7 @@ The `./our_datasets` directory contains eight benchmarks used in our experiments
 ### Environment
 For reproducibility, we report the hardware and software environment used in our study.
 - Python: 3.13.2 / CUDA: 12.2 / NVIDIA driver: 535.247.01
-- GPU: NVIDIA RTX 6000 Ada Generation (49140 MiB)
+- GPU: NVIDIA RTX 6000 Ada Generation or NVIDIA GeForce RTX 4090 (single GPU setup)
 
 ## Running Experiments
 
