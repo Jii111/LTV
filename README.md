@@ -59,9 +59,10 @@ You can configure the parameters in `config/config_our_metric.py`
   - `result_dir` : base directory containing saved logits
 
 ### 2) Method: LTV
-The main execution script is `run/run_our_ltv.sh`. It calls `run/run_our_ltv.py` with the config file. The script runs a unified baseline evaluation covering zero‑shot ICL, few‑shot ICL, and LTV.
+#### 2-1) Classification (Main Experiment)
+The main execution script is `run/run_our_ltv.sh`. It calls `run/run_our_ltv.py` with the config file. The script runs a unified baseline evaluation covering zero‑shot ICL, few‑shot ICL, and LTV across eight classification benchmarks.
 
-```bash
+```
 bash ./run/run_our_ltv.sh
 ```
 
@@ -71,6 +72,24 @@ You can configure the parameters in `config/config_our_ltv.py`
   - `num_train_queries` : number of training queries used to extract LTV
   - `ridge_lambda` : regularization strength for LTV
   - `compute_d_NTP` : enable our metric d<sub>NTP</sub> evaluation
+
+#### 2-2) Regression
+The script `run/run_regression.sh` runs experiments on synthetic regression tasks (linear and ReLU regression), covering zero-shot ICL, few-shot ICL, and LTV.
+
+```
+bash ./run/run_our_regression.sh
+```
+
+You can configure the parameters in `config/config_regression.py`.
+
+#### 2-3) Transfer Experiments
+The script `run/run_transfer.sh` evaluates cross-model transfer, where LTV extracted from a larger model is applied to a smaller model.
+
+```
+bash ./run/run_our_transfer.sh
+```
+
+You can configure the parameters in `config/config_transfer.py`.
 
 ## Acknowledgments
 We gratefully acknowledge the following repositories, which served as the foundation for this work:

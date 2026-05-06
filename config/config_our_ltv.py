@@ -8,7 +8,7 @@ config['datasets'] = ['sst2','sst5','mr','subj','trec','hate_speech18','agnews',
 config['num_shot'] = 30 # number of shots, which ensures label balance by including the maximum possible examples per label
 config['bs'] = 16  # batch size
 
-# Run LTV (adaptive task vector)
+# Run LTV
 config['run_baseline'] = True
 config['run_ltv'] = True
 
