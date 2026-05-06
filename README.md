@@ -1,4 +1,4 @@
-# Probabilistic Alignment as a Criterion for Designing Task Vectors in In-Context Learning
+# Distributional Alignment as a Criterion for Designing Task Vectors in In-Context Learning
 
 This repository contains the official implementation of the metric and method proposed in **Distributional Alignment as a Principle for Designing Task Vectors in In-Context Learning.**
 
