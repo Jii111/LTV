@@ -37,6 +37,38 @@ def compute_d_NTP(
     kl = (p * (log_p - log_q)).sum(dim=-1)
     return kl.mean().item()
 
+def compute_L_mse(
+    hidden_icl: "Union[torch.Tensor, List[torch.Tensor]]",
+    hidden_tv: "Union[torch.Tensor, List[torch.Tensor]]",
+) -> Dict[str, float]:
+    """
+    Proxy objective L_MSE (paper eq. 11), reported as a metric (cf. Table 8):
+        L_MSE(f) = E_x[ || h_icl(x) - h_tv(x) ||_2^2 ],
+    where h_icl / h_tv are the final-layer hidden states at the label (last
+    prompt token) position under ICL and TV inference, respectively.
+
+    Returns both the eq.-11 value (squared L2 norm summed over hidden dim,
+    averaged over queries) and a per-dimension variant for cross-model
+    comparison (divided by hidden size d).
+    """
+    if isinstance(hidden_icl, list):
+        hidden_icl = torch.cat(hidden_icl, dim=0)
+    if isinstance(hidden_tv, list):
+        hidden_tv = torch.cat(hidden_tv, dim=0)
+
+    if hidden_icl.numel() == 0 or hidden_tv.numel() == 0:
+        return {"L_mse": 0.0, "L_mse_per_dim": 0.0}
+
+    assert hidden_icl.shape == hidden_tv.shape, (
+        f"Shape mismatch: {tuple(hidden_icl.shape)} vs {tuple(hidden_tv.shape)}"
+    )
+
+    sq_diff = (hidden_icl.float() - hidden_tv.float()).pow(2)
+    l_mse = sq_diff.sum(dim=-1).mean().item()
+    l_mse_per_dim = sq_diff.mean().item()
+    return {"L_mse": l_mse, "L_mse_per_dim": l_mse_per_dim}
+
+
 def plot_d_NTP(
     datasets_map: Dict[str, Dict[str, List[float]]],
     save_path: str,

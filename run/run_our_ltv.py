@@ -56,6 +56,7 @@ def main(args):
     num_shot = cfg['num_shot']
     use_cache = cfg['use_cache']
     return_logits = cfg['return_logits']
+    compute_L_mse = cfg.get('compute_L_mse', False)
     load_in_8bit = cfg['load_in_8bit']
     save_logits = cfg.get('save_logits', False)
     extraction_batch_size = cfg['extraction_batch_size']
@@ -97,6 +98,10 @@ def main(args):
 
     cv_save_dict = {}
 
+    # Zero-shot label hiddens (demo-independent): extracted once at run 0,
+    # reused across runs as the f=0 reference for L_mse.
+    test_zero_hidden = None
+
     for run_id in tqdm(range(run_num), desc="Overall Progress", position=0):
         args.run_name = f'run_{run_id} : {time.time()}'
         print_header(f"Run {run_id + 1}/{run_num}: {args.run_name}")
@@ -124,22 +129,32 @@ def main(args):
         # Zero-shot baseline
         if run_id == 0 and cfg['run_baseline']:
             print("Evaluating zero-shot baseline...")
-            test_zero = test_evaluator.evaluate(
+            zero_out = test_evaluator.evaluate(
                 base_wrapper, tokenizer, demonstration='',
-                use_cache=use_cache
+                use_cache=use_cache,
+                return_hidden=compute_L_mse
             )
+            if compute_L_mse:
+                test_zero, test_zero_hidden = zero_out
+            else:
+                test_zero = zero_out
             result_dict['test_result']['zero_shot'].append(test_zero)
             print_result("Test zero-shot", test_zero)
 
         # Few-shot baseline
-        test_few_logits = test_few_labels = None
+        test_few_logits = test_few_labels = test_few_hidden = None
         if cfg['run_baseline']:
             print("Evaluating few-shot baseline...")
-            test_few, test_few_logits, test_few_labels = test_evaluator.evaluate(
+            few_out = test_evaluator.evaluate(
                 base_wrapper, tokenizer, demonstration=baseline_demon,
                 use_cache=use_cache,
-                return_logits=return_logits
+                return_logits=return_logits,
+                return_hidden=compute_L_mse
             )
+            if compute_L_mse:
+                test_few, test_few_logits, test_few_labels, test_few_hidden = few_out
+            else:
+                test_few, test_few_logits, test_few_labels = few_out
             result_dict['test_result']['few_shot'].append(test_few)
             print_result("Test few-shot", test_few)
             if save_logits and test_few_logits is not None:
@@ -194,14 +209,20 @@ def main(args):
                         um.save_task_vectors({layer_idx: adaptive_vectors}, save_path)
 
                     print("LTV: evaluating...")
+                    test_ltv_hidden = None
                     ltv_start = time.time()
                     with ltv_wrapper.inject_adaptive_task_vector(adaptive_vectors):
-                        test_ltv, test_ltv_logits, test_ltv_labels = test_evaluator.evaluate(
+                        ltv_out = test_evaluator.evaluate(
                             ltv_wrapper, tokenizer, demonstration='',
                             use_cache=use_cache,
-                            return_logits=return_logits
+                            return_logits=return_logits,
+                            return_hidden=compute_L_mse
                         )
                     ltv_end = time.time()
+                    if compute_L_mse:
+                        test_ltv, test_ltv_logits, test_ltv_labels, test_ltv_hidden = ltv_out
+                    else:
+                        test_ltv, test_ltv_logits, test_ltv_labels = ltv_out
                     ltv_metrics = dict(test_ltv) if isinstance(test_ltv, dict) else {"result": test_ltv}
                     result_dict['time']['ltv'].append(ltv_end - ltv_start)
                     print_result("Test LTV", test_ltv)
@@ -211,6 +232,19 @@ def main(args):
                             test_few_logits, test_ltv_logits, is_qwen='Qwen' in args.model_name
                         )
                         ltv_metrics["d_NTP"] = mean_d_NTP_ltv
+
+                    # L_MSE (paper eq. 11): E_x ||h_icl - h_tv||^2 at the final-layer
+                    # label position. h_tv is captured from the actual injected forward
+                    # (the same pass that produced the LTV logits above).
+                    if compute_L_mse and test_few_hidden is not None and test_ltv_hidden is not None \
+                            and test_few_labels == test_ltv_labels:
+                        ltv_metrics.update(metric.compute_L_mse(test_few_hidden, test_ltv_hidden))
+                        if test_zero_hidden is not None:
+                            # f = 0 reference: E_x ||h_icl - h_zs||^2 (no task vector).
+                            zero_ref = metric.compute_L_mse(test_few_hidden, test_zero_hidden)
+                            ltv_metrics["L_mse_zero_ref"] = zero_ref["L_mse"]
+                        print_result("Test LTV L_mse", {k: v for k, v in ltv_metrics.items()
+                                                        if k.startswith("L_mse")})
 
                     utils.nested_set(ltv_test_dict, [q_key, lam_key], ltv_metrics)
                     if save_logits and test_ltv_logits is not None:
