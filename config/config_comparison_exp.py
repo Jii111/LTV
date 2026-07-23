@@ -21,6 +21,7 @@ config['demo_seed'] = 12
 config['metric'] = 'acc'
 config['use_cache'] = False
 config['load_in_8bit'] = False
+config['compute_L_mse'] = True  # L_MSE (eq. 11) for zero-ref / LTV / MLP variants
 
 # LTV extraction
 config['num_train_queries'] = 256

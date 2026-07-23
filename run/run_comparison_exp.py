@@ -28,6 +28,7 @@ from tqdm import tqdm
 
 import our_datasets as md
 import core.evaluator as ev
+import core.metric as metric
 import core.utils.utils as utils
 import core.utils.utils_method as um
 from core.wrapper_ltv import LTVWrapper
@@ -207,6 +208,7 @@ def run_zero_shot_hidden_extraction(
 @torch.no_grad()
 def main(args):
     cfg = args.config
+    compute_L_mse = cfg.get('compute_L_mse', True)
     print(f"[Init] {args.model_name} on {args.dataset_name}")
     utils.set_seed(cfg['seed'])
     args.device = utils.set_device(args.gpu)
@@ -322,6 +324,10 @@ def main(args):
             torch.cuda.empty_cache()
         icl_hidden = torch.cat(icl_hidden_list, dim=0).to(dtype=zero_hidden.dtype)
 
+        if compute_L_mse:
+            # f = 0 reference: E_x ||h_icl - h_zs||^2 (no task vector applied).
+            run_result['zero_baseline'].update(metric.compute_L_mse(icl_hidden, zero_hidden))
+
         # Train queries
         exclude_demo = set(demon_indices) if demon_indices is not None else set()
         train_queries, _ = utils.build_train_queries(
@@ -343,13 +349,19 @@ def main(args):
         extract_time = time.time() - t0
 
         print("[LTV] Evaluating...")
+        ltv_hidden = None
         t0 = time.time()
         with ltv_wrapper.inject_adaptive_task_vector(adaptive_vectors):
-            ltv_metrics = test_evaluator.evaluate(
+            ltv_out = test_evaluator.evaluate(
                 ltv_wrapper, tokenizer, demonstration='',
                 use_cache=cfg['use_cache'],
+                return_hidden=compute_L_mse,
             )
         infer_time = time.time() - t0
+        if compute_L_mse:
+            ltv_metrics, ltv_hidden = ltv_out
+        else:
+            ltv_metrics = ltv_out
         if isinstance(ltv_metrics, tuple):
             ltv_metrics = ltv_metrics[0]
 
@@ -359,6 +371,10 @@ def main(args):
             'extract_time_sec': round(extract_time, 3),
             'infer_time_per_sample_sec': round(infer_time / num_test, 6),
         }
+        if ltv_hidden is not None:
+            # h_tv captured from the actual injected forward (same pass as the
+            # LTV metrics above); h_icl from the extraction pass earlier.
+            run_result['ltv_adaptive'].update(metric.compute_L_mse(icl_hidden, ltv_hidden))
 
         # ====== MLP variants ======
         mlp_cfg = cfg['mlp']
@@ -471,6 +487,9 @@ def main(args):
                     'train_time_sec': round(train_time, 3),
                     'infer_time_per_sample_sec': round(mlp_infer_time / num_test, 6),
                 }
+                if compute_L_mse:
+                    # h_tv for the MLP variant is h_zs + MLP(h_zs), fed to the LM head.
+                    run_result[key].update(metric.compute_L_mse(icl_hidden, m2mlp_hidden))
 
                 del mlp_model
                 torch.cuda.empty_cache()
