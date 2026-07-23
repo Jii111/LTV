@@ -19,7 +19,6 @@ config['seed'] = 42
 config['demo_seed'] = 12
 config['load_in_8bit'] = True
 config['use_cache'] = False
-config['save_logits'] = False
 
 # Data settings
 config['sample_method'] = 'uniform'  # 'random', 'uniform'

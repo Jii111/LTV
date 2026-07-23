@@ -57,6 +57,10 @@ def main(args):
     use_cache = cfg['use_cache']
     return_logits = cfg['return_logits']
     compute_L_mse = cfg.get('compute_L_mse', False)
+    if compute_L_mse and not return_logits:
+        # The 4-way unpacks below (and d_NTP) require logits alongside hiddens.
+        print("[Warn] compute_L_mse=True requires logits; forcing return_logits=True")
+        return_logits = True
     load_in_8bit = cfg['load_in_8bit']
     save_logits = cfg.get('save_logits', False)
     extraction_batch_size = cfg['extraction_batch_size']
@@ -236,6 +240,8 @@ def main(args):
                     # L_MSE (paper eq. 11): E_x ||h_icl - h_tv||^2 at the final-layer
                     # label position. h_tv is captured from the actual injected forward
                     # (the same pass that produced the LTV logits above).
+                    if compute_L_mse and test_few_hidden is None:
+                        print("[Warn] L_mse skipped: no ICL reference hidden (run_baseline=False?)")
                     if compute_L_mse and test_few_hidden is not None and test_ltv_hidden is not None \
                             and test_few_labels == test_ltv_labels:
                         ltv_metrics.update(metric.compute_L_mse(test_few_hidden, test_ltv_hidden))
