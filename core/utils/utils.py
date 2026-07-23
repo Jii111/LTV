@@ -57,6 +57,7 @@ def load_model_tokenizer(
     device: torch.device,
     output_hidden_states: bool = True,
     load_in_8bit: bool = False,
+    load_in_4bit: bool = False,
 ) -> Tuple[PreTrainedModel, PreTrainedTokenizerBase, PretrainedConfig]:
     """Load a model/tokenizer pair with optional quantization."""
 
@@ -66,7 +67,17 @@ def load_model_tokenizer(
         tokenizer = AutoTokenizer.from_pretrained(model_name)
 
     if 'Qwen' in model_name:
-        if load_in_8bit:
+        if load_in_4bit:
+            quant_cfg = BitsAndBytesConfig(
+                load_in_4bit=True,
+                bnb_4bit_compute_dtype=torch.bfloat16,
+                bnb_4bit_use_double_quant=True,
+                bnb_4bit_quant_type="nf4",
+            )
+            model = AutoModelForCausalLM.from_pretrained(
+                model_name, quantization_config=quant_cfg,
+                device_map="auto", low_cpu_mem_usage=True)
+        elif load_in_8bit:
             quant_cfg = BitsAndBytesConfig(load_in_8bit=load_in_8bit) if load_in_8bit else None
             model = AutoModelForCausalLM.from_pretrained(
                 model_name, torch_dtype=torch.bfloat16,

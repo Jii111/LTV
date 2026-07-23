@@ -30,7 +30,7 @@ import our_datasets as md
 import core.evaluator as ev
 import core.metric as metric
 import core.utils.utils as utils
-from LTV_for_public.LTV.core.wrapper_transfer import CrossModelLTVWrapper, compare_lm_head_label_vectors
+from core.wrapper_transfer import CrossModelLTVWrapper, compare_lm_head_label_vectors
 
 
 def compute_lm_head_alignment(lm_head_large: torch.Tensor, lm_head_small: torch.Tensor) -> torch.Tensor:
@@ -179,6 +179,7 @@ def main(args):
     cfg = args.config
     seed = cfg['seed']
     load_in_8bit = cfg['load_in_8bit']
+    load_in_4bit = cfg.get('load_in_4bit', False)
     extraction_batch_size = cfg['extraction_batch_size']
     ridge_lambdas = cfg['ridge_lambda']
     num_train_queries_list = cfg['num_train_queries']
@@ -234,7 +235,8 @@ def main(args):
     # ------------------------------------------------------------------ #
     print_header(f"Phase 1: Large model ({cfg['large_model']})")
     large_model, large_tokenizer, large_model_config = utils.load_model_tokenizer(
-        cfg['large_model'], device, output_hidden_states=True, load_in_8bit=load_in_8bit
+        cfg['large_model'], device, output_hidden_states=True,
+        load_in_8bit=load_in_8bit, load_in_4bit=load_in_4bit,
     )
     large_wrapper = CrossModelLTVWrapper(large_model, large_tokenizer, large_model_config, device)
 
@@ -317,7 +319,8 @@ def main(args):
     # ------------------------------------------------------------------ #
     print_header(f"Phase 2: Small model ({cfg['small_model']})")
     small_model, small_tokenizer, small_model_config = utils.load_model_tokenizer(
-        cfg['small_model'], device, output_hidden_states=True, load_in_8bit=load_in_8bit
+        cfg['small_model'], device, output_hidden_states=True,
+        load_in_8bit=load_in_8bit, load_in_4bit=load_in_4bit,
     )
     small_wrapper = CrossModelLTVWrapper(small_model, small_tokenizer, small_model_config, device)
 

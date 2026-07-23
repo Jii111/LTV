@@ -13,7 +13,8 @@ config['bs'] = 2  # batch size
 config['run_num'] = 5
 config['seed'] = 42
 config['demo_seed'] = 12
-config['load_in_8bit'] = True
+config['load_in_8bit'] = False
+config['load_in_4bit'] = True
 config['use_cache'] = False
 
 # Data settings

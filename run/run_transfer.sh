@@ -14,7 +14,7 @@ mkdir -p "$PROJECT_DIR/.log"
 
 TIMESTAMP=$(date +"%Y%m%d_%H%M%S")
 LOG_FILE="$PROJECT_DIR/.log/cross_model_${TIMESTAMP}.log"
-CONFIG_PATH="${1:-${REPO_ROOT}/config/config_cross_model.py}"
+CONFIG_PATH="${1:-${REPO_ROOT}/config/config_transfer.py}"
 
 echo "Logging to: $LOG_FILE"
 echo "Project directory: $PROJECT_DIR"
@@ -23,7 +23,7 @@ echo "==========================================" | tee -a "$LOG_FILE"
 echo "Starting cross-model LTV run" | tee -a "$LOG_FILE"
 echo "==========================================" | tee -a "$LOG_FILE"
 
-CMD=(python "${REPO_ROOT}/run/run_cross_model.py" --config_path "${CONFIG_PATH}")
+CMD=(python "${REPO_ROOT}/run/run_transfer.py" --config_path "${CONFIG_PATH}")
 echo "Command: ${CMD[*]}" | tee -a "$LOG_FILE"
 
 if "${CMD[@]}" 2>&1 | tee -a "$LOG_FILE"; then

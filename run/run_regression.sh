@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Run regression experiments.
-# All settings (model, gpu, datasets, ...) are in configs/config_regression.py
+# All settings (model, gpu, datasets, ...) are in config/config_regression.py
 #
 # Usage:
 #   bash scripts/run_regression.sh
@@ -11,11 +11,12 @@ PROJECT_DIR=$(dirname "$I2CL_DIR")
 
 export HF_DATASETS_CACHE="$PROJECT_DIR/.cache"
 export HF_HOME="$PROJECT_DIR/.cache"
+export PYTHONPATH="${I2CL_DIR}:${PYTHONPATH}"
 
 mkdir -p "$I2CL_DIR/.log"
 TIMESTAMP=$(date +"%Y%m%d_%H%M%S")
 LOG_FILE="$I2CL_DIR/.log/regression_${TIMESTAMP}.log"
-CONFIG="$I2CL_DIR/configs/config_regression.py"
+CONFIG="$I2CL_DIR/config/config_regression.py"
 
 # Read model, gpu, datasets from config
 MODEL=$(python3 -c "
@@ -36,7 +37,7 @@ DATASETS=$(python3 -c "
 import importlib.util, sys
 spec = importlib.util.spec_from_file_location('cfg', '$CONFIG')
 m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
-print(' '.join(m.config.get('datasets', ['linear_regression', 'sinusoidal_regression'])))
+print(' '.join(m.config.get('datasets', ['linear_regression', 'relu_regression'])))
 ")
 
 echo "Model:    $MODEL"    | tee -a "$LOG_FILE"
@@ -51,7 +52,7 @@ for DATASET in $DATASETS; do
     echo ">> Dataset: $DATASET" | tee -a "$LOG_FILE"
     echo "==========================================" | tee -a "$LOG_FILE"
 
-    if cd "$I2CL_DIR" && CUDA_VISIBLE_DEVICES=$GPU python run_regression.py \
+    if cd "$I2CL_DIR" && CUDA_VISIBLE_DEVICES=$GPU python run/run_regression.py \
         --config  "$CONFIG" \
         --model   "$MODEL" \
         --dataset "$DATASET" \
