@@ -208,7 +208,7 @@ def run_zero_shot_hidden_extraction(
 @torch.no_grad()
 def main(args):
     cfg = args.config
-    compute_L_mse = cfg.get('compute_L_mse', True)
+    compute_L_mse = cfg.get('compute_L_mse', False)
     print(f"[Init] {args.model_name} on {args.dataset_name}")
     utils.set_seed(cfg['seed'])
     args.device = utils.set_device(args.gpu)
