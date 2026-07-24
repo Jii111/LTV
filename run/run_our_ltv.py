@@ -26,6 +26,7 @@ import core.utils.utils as utils
 import core.utils.utils_method as um
 from core.wrapper_ltv import LTVWrapper
 from core.wrapper_learned_tv import LearnedTVWrapper
+from core.wrapper_learnable_tv import LearnableTVWrapper
 
 task_queue = None
 
@@ -58,9 +59,9 @@ def print_eta(prefix: str, done: int, total: int, start_time: float) -> None:
 def init_result_dict() -> dict:
     result_dict = {
         'test_result': {
-            'zero_shot': [], 'few_shot': [], 'ltv': [], 'learned_tv': []
+            'zero_shot': [], 'few_shot': [], 'ltv': [], 'learned_tv': [], 'learnable_tv': []
         },
-        'time': {'ltv': [], 'learned_tv': []}
+        'time': {'ltv': [], 'learned_tv': [], 'learnable_tv': []}
     }
     return result_dict
 
@@ -401,6 +402,102 @@ def main(args):
 
             result_dict['test_result']['learned_tv'].append(lt_entry)
             del lt_wrapper
+            torch.cuda.empty_cache()
+
+        # ====== Learnable-TV baseline (Saglam et al., ACL Findings 2025) ======
+        if cfg.get('run_learnable_tv', False):
+            la_cfg = cfg.get('learnable_tv', {})
+            la_wrapper = LearnableTVWrapper(model, tokenizer, model_config, args.device)
+
+            exclude_demo = set(demon_indices) if demon_indices is not None else set()
+            la_queries, la_indices = utils.build_train_queries(
+                train_dataset, la_cfg.get('num_train_queries', 256),
+                exclude_indices=exclude_demo,
+            )
+            la_labels = [train_dataset.apply_template(train_dataset.all_data[i])[2]
+                         for i in la_indices]
+            options = train_dataset.get_dmonstration_template()['options']
+            # Pool of structured demonstration examples for the label-shuffled CE prompts.
+            la_pool = [train_dataset.apply_template(train_dataset.all_data[i])
+                       for i in (demon_indices if demon_indices is not None else la_indices)]
+            losses = la_cfg.get('losses', ['ce'])
+
+            print("Learnable-TV: building per-layer head basis...")
+            la_basis = la_wrapper.collect_head_basis(
+                baseline_demon, la_queries, tokenizer, batch_size=extraction_batch_size,
+            )
+            la_icl_targets = None
+            if 'lmse' in losses:
+                la_icl_targets = la_wrapper.collect_icl_hidden(
+                    baseline_demon, la_queries, tokenizer, batch_size=extraction_batch_size,
+                )
+
+            la_entry = {}
+            for loss_name in losses:
+                print(f"Learnable-TV ({loss_name}): training (lr={la_cfg.get('lr', 5e-5)})...")
+                la_start = time.time()
+                phi, train_info = la_wrapper.train_learnable_tv(
+                    queries=la_queries, labels=la_labels, pool=la_pool, tokenizer=tokenizer,
+                    model_name=args.model_name, options=options, basis=la_basis,
+                    loss=loss_name, icl_targets=la_icl_targets,
+                    k_shot=la_cfg.get('k_shot', 10),
+                    lr=la_cfg.get('lr', 5e-5),
+                    weight_decay=la_cfg.get('weight_decay', 0.0),
+                    epochs=la_cfg.get('epochs', 10),
+                    samples_per_epoch=la_cfg.get('samples_per_epoch', 100),
+                    patience=la_cfg.get('patience', 2),
+                    val_ratio=la_cfg.get('val_ratio', 0.2),
+                    init=la_cfg.get('init', 'zero'),
+                    example_separator=cfg['example_separator'],
+                    seed=seed + run_id,
+                )
+                train_time = time.time() - la_start
+
+                print(f"Learnable-TV ({loss_name}): evaluating...")
+                test_la_hidden = None
+                with la_wrapper.inject_learnable_tv(phi, la_basis):
+                    la_out = test_evaluator.evaluate(
+                        la_wrapper, tokenizer, demonstration='',
+                        use_cache=use_cache,
+                        return_logits=return_logits,
+                        return_hidden=compute_L_mse,
+                        desc=f"Eval Learnable-TV ({loss_name})"
+                    )
+                if compute_L_mse:
+                    test_la, test_la_logits, test_la_labels, test_la_hidden = la_out
+                else:
+                    test_la, test_la_logits, test_la_labels = la_out
+                la_metrics = dict(test_la) if isinstance(test_la, dict) else {"result": test_la}
+                la_metrics.update({'loss': loss_name, 'train_time_sec': round(train_time, 3),
+                                   **{f'train_{k}': v for k, v in train_info.items()}})
+                result_dict['time']['learnable_tv'].append(train_time)
+                print_result(f"Test Learnable-TV ({loss_name})", test_la)
+
+                # Same alignment metrics as the LTV block, vs the same ICL reference.
+                if cfg.get('compute_d_NTP', False) and test_few_labels == test_la_labels:
+                    la_metrics["d_NTP"] = metric.compute_d_NTP(
+                        test_few_logits, test_la_logits, is_qwen='Qwen' in args.model_name
+                    )
+                    la_metrics.update(metric.compute_L_mse_logit(test_few_logits, test_la_logits))
+                    if test_zero_logits is not None and test_zero_labels == test_few_labels:
+                        la_metrics["d_NTP_zero_ref"] = metric.compute_d_NTP(
+                            test_few_logits, test_zero_logits, is_qwen='Qwen' in args.model_name
+                        )
+                        la_metrics["L_mse_logit_zero_ref"] = metric.compute_L_mse_logit(
+                            test_few_logits, test_zero_logits)["L_mse_logit"]
+                if compute_L_mse and test_few_hidden is not None and test_la_hidden is not None \
+                        and test_few_labels == test_la_labels:
+                    la_metrics.update(metric.compute_L_mse(test_few_hidden, test_la_hidden))
+                    if test_zero_hidden is not None:
+                        la_metrics["L_mse_zero_ref"] = metric.compute_L_mse(
+                            test_few_hidden, test_zero_hidden)["L_mse"]
+                    print_result(f"Test Learnable-TV ({loss_name}) L_mse",
+                                 {k: v for k, v in la_metrics.items() if k.startswith("L_mse")})
+
+                la_entry[loss_name] = la_metrics
+
+            result_dict['test_result']['learnable_tv'].append(la_entry)
+            del la_wrapper
             torch.cuda.empty_cache()
 
         print_eta(f"{args.dataset_name} runs", run_id + 1, run_num, suite_start)

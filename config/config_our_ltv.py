@@ -16,8 +16,8 @@ config['run_ltv'] = True
 # injected at the input of one decoder layer at the label position.
 config['run_learned_tv'] = True
 config['learned_tv'] = {
-    'losses': ['lmse', 'ce'],  # 'lmse': label-free, trains on our eq.-11 proxy vs ICL hiddens
-                               # 'ce'  : paper-faithful gold-label cross-entropy (reviewer-facing row)
+    'losses': ['ce', 'lmse'],  # 'ce'  : paper-faithful gold-label cross-entropy (their actual method)
+                               # 'lmse': label-free variant on our eq.-11 proxy vs ICL hiddens (our addition)
     'layer': 'mid',            # their best configuration: middle decoder layer
     'lr': 1e-3,                # paper text (their released code uses 5e-3)
     'weight_decay': 0.01,
@@ -27,6 +27,25 @@ config['learned_tv'] = {
     'val_ratio': 0.2,          # 80/20 train/val split of the anchor pool
     'num_train_queries': 256,  # same anchor budget as LTV ('ce' additionally consumes gold labels)
     'init_scale': 0.1,
+}
+
+# Learnable-TV baseline (Saglam et al., ACL Findings 2025): a learnable
+# (n_layers x n_heads) mixing matrix over per-layer ICL-activation bases,
+# added to every decoder layer's output at the label position.
+config['run_learnable_tv'] = True
+config['learnable_tv'] = {
+    'losses': ['ce', 'lmse'],  # 'ce'  : paper-faithful, CE on label-shuffled k-shot ICL prompts
+                               # 'lmse': label-free variant on our eq.-11 proxy (our addition)
+    'k_shot': 10,              # shots in the shuffled CE prompts (their README setting)
+    'lr': 5e-5,                # their Adam lr (no weight decay)
+    'weight_decay': 0.0,
+    'init': 'zero',            # zero-init Phi: neutral start (v=0), safe early stopping, fair
+                               # matched-budget number. Repo uses randn but trains 64x longer.
+    'epochs': 12,
+    'samples_per_epoch': 200,  # ~2400 batch-1 steps: all-layer Phi needs more than a single vector
+    'patience': 3,
+    'val_ratio': 0.2,
+    'num_train_queries': 256,  # same anchor budget as LTV (basis + 'ce' labels)
 }
 
 # Experiment settings
