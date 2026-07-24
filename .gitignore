@@ -1,5 +1,6 @@
 .log/
 results/
+exps/
 .cache/
 __pycache__/
 *.pyc
