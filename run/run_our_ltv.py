@@ -102,9 +102,10 @@ def main(args):
 
     cv_save_dict = {}
 
-    # Zero-shot label hiddens (demo-independent): extracted once at run 0,
-    # reused across runs as the f=0 reference for L_mse.
+    # Zero-shot label hiddens/logits (demo-independent): extracted once at
+    # run 0, reused across runs as the f=0 reference for L_mse / d_NTP.
     test_zero_hidden = None
+    test_zero_logits = test_zero_labels = None
 
     for run_id in tqdm(range(run_num), desc="Overall Progress", position=0):
         args.run_name = f'run_{run_id} : {time.time()}'
@@ -136,9 +137,14 @@ def main(args):
             zero_out = test_evaluator.evaluate(
                 base_wrapper, tokenizer, demonstration='',
                 use_cache=use_cache,
+                return_logits=return_logits,
                 return_hidden=compute_L_mse
             )
-            if compute_L_mse:
+            if return_logits and compute_L_mse:
+                test_zero, test_zero_logits, test_zero_labels, test_zero_hidden = zero_out
+            elif return_logits:
+                test_zero, test_zero_logits, test_zero_labels = zero_out
+            elif compute_L_mse:
                 test_zero, test_zero_hidden = zero_out
             else:
                 test_zero = zero_out
@@ -238,6 +244,18 @@ def main(args):
                         ltv_metrics["d_NTP"] = mean_d_NTP_ltv
                         # Label-logit-space MSE on the same (N, K) tensors as d_NTP.
                         ltv_metrics.update(metric.compute_L_mse_logit(test_few_logits, test_ltv_logits))
+
+                        # f = 0 references on the same tensors: KL / logit-MSE between
+                        # this run's ICL distribution and the (demo-independent)
+                        # zero-shot distribution. Together with d_NTP / L_mse_logit
+                        # above, each cell carries the full zero -> LTV pair used by
+                        # run/compare_zero_ltv.py.
+                        if test_zero_logits is not None and test_zero_labels == test_few_labels:
+                            ltv_metrics["d_NTP_zero_ref"] = metric.compute_d_NTP(
+                                test_few_logits, test_zero_logits, is_qwen='Qwen' in args.model_name
+                            )
+                            zero_logit_ref = metric.compute_L_mse_logit(test_few_logits, test_zero_logits)
+                            ltv_metrics["L_mse_logit_zero_ref"] = zero_logit_ref["L_mse_logit"]
 
                     # L_MSE (paper eq. 11): E_x ||h_icl - h_tv||^2 at the final-layer
                     # label position. h_tv is captured from the actual injected forward
