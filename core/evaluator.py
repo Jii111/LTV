@@ -3,6 +3,7 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from tqdm import tqdm
 from typing import Any, Dict, List, Optional, Tuple
 
 import global_vars as gv
@@ -31,13 +32,15 @@ class Evaluator(nn.Module):
         model_config: Optional[Any] = None,
         return_q_states: bool = False,
         return_hidden: bool = False,
+        desc: str = "Eval",
     ):
         """Evaluate a model wrapper on the dataset."""
         return self._evaluate_text_classification_batch(
             model_wrapper, tokenizer,
             demonstration, use_cache=use_cache, return_logits=return_logits,
             return_head_outputs=return_head_outputs, fv_vector=fv_vector, sv_logit=sv_logit, edit_layer=edit_layer, model_config=model_config,
-            return_q_states=return_q_states, return_hidden=return_hidden
+            return_q_states=return_q_states, return_hidden=return_hidden,
+            desc=desc
         )
         
     def _evaluate_text_classification_batch(
@@ -54,6 +57,7 @@ class Evaluator(nn.Module):
         return_head_outputs: bool = False,
         return_q_states: bool = False,
         return_hidden: bool = False,
+        desc: str = "Eval",
     ):
         """Run batched evaluation and collect logits."""
 
@@ -69,7 +73,9 @@ class Evaluator(nn.Module):
 
         use_cache = False
 
-        for batch_idx, i in enumerate(range(0, len(all_inputs), self.batch_size)):
+        # tqdm gives per-batch it/s and ETA for every eval pass.
+        for batch_idx, i in enumerate(tqdm(range(0, len(all_inputs), self.batch_size),
+                                           desc=desc, leave=False)):
             cur_inputs = all_inputs[i:i + self.batch_size]
 
             input_tok = tokenizer(cur_inputs, return_tensors="pt", padding=True)

@@ -40,6 +40,21 @@ def print_result(label: str, result) -> None:
     print(f"{label}: {result}\n")
 
 
+def fmt_secs(s: float) -> str:
+    s = int(s)
+    return f"{s // 3600}h{(s % 3600) // 60:02d}m" if s >= 3600 else f"{s // 60}m{s % 60:02d}s"
+
+
+def print_eta(prefix: str, done: int, total: int, start_time: float) -> None:
+    """Elapsed / per-unit / ETA line after each completed unit of work."""
+    elapsed = time.time() - start_time
+    per = elapsed / max(done, 1)
+    remain = per * (total - done)
+    finish = time.strftime("%H:%M", time.localtime(time.time() + remain))
+    print(f"[ETA] {prefix}: {done}/{total} done | elapsed {fmt_secs(elapsed)} "
+          f"| {fmt_secs(per)}/unit | remaining {fmt_secs(remain)} (~{finish})")
+
+
 def init_result_dict() -> dict:
     result_dict = {
         'test_result': {
@@ -108,6 +123,7 @@ def main(args):
     test_zero_hidden = None
     test_zero_logits = test_zero_labels = None
 
+    suite_start = time.time()
     for run_id in tqdm(range(run_num), desc="Overall Progress", position=0):
         args.run_name = f'run_{run_id} : {time.time()}'
         print_header(f"Run {run_id + 1}/{run_num}: {args.run_name}")
@@ -139,7 +155,8 @@ def main(args):
                 base_wrapper, tokenizer, demonstration='',
                 use_cache=use_cache,
                 return_logits=return_logits,
-                return_hidden=compute_L_mse
+                return_hidden=compute_L_mse,
+                desc="Eval zero-shot"
             )
             if return_logits and compute_L_mse:
                 test_zero, test_zero_logits, test_zero_labels, test_zero_hidden = zero_out
@@ -160,7 +177,8 @@ def main(args):
                 base_wrapper, tokenizer, demonstration=baseline_demon,
                 use_cache=use_cache,
                 return_logits=return_logits,
-                return_hidden=compute_L_mse
+                return_hidden=compute_L_mse,
+                desc="Eval few-shot ICL"
             )
             if compute_L_mse:
                 test_few, test_few_logits, test_few_labels, test_few_hidden = few_out
@@ -227,7 +245,8 @@ def main(args):
                             ltv_wrapper, tokenizer, demonstration='',
                             use_cache=use_cache,
                             return_logits=return_logits,
-                            return_hidden=compute_L_mse
+                            return_hidden=compute_L_mse,
+                            desc=f"Eval LTV (λ={ridge_lambda})"
                         )
                     ltv_end = time.time()
                     if compute_L_mse:
@@ -345,6 +364,7 @@ def main(args):
                         use_cache=use_cache,
                         return_logits=return_logits,
                         return_hidden=compute_L_mse,
+                        desc=f"Eval Learned-TV ({loss_name})"
                     )
                 if compute_L_mse:
                     test_lt, test_lt_logits, test_lt_labels, test_lt_hidden = lt_out
@@ -382,6 +402,8 @@ def main(args):
             result_dict['test_result']['learned_tv'].append(lt_entry)
             del lt_wrapper
             torch.cuda.empty_cache()
+
+        print_eta(f"{args.dataset_name} runs", run_id + 1, run_num, suite_start)
 
     with open(os.path.join(args.save_dir, 'result_dict.json'), 'w') as f:
         json.dump(result_dict, f, indent=4)
@@ -440,7 +462,8 @@ if __name__ == "__main__":
     gpu_id = config['gpus'][0]
 
     combinations = list(itertools.product(config['models'], config['datasets']))
-    for model_name, dataset_name in combinations:
+    combos_start = time.time()
+    for combo_i, (model_name, dataset_name) in enumerate(combinations):
         print(f"Running Baselines: {model_name} on {dataset_name} with GPU {gpu_id}")
 
         input_args = argparse.Namespace()
@@ -455,6 +478,7 @@ if __name__ == "__main__":
             gc.collect()
             torch.cuda.empty_cache()
             print(f"CUDA memory cleared for GPU {gpu_id}")
+            print_eta("model x dataset combinations", combo_i + 1, len(combinations), combos_start)
             time.sleep(3)
 
     print("All baseline tasks completed.")

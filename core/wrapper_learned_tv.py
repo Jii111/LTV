@@ -185,7 +185,9 @@ class LearnedTVWrapper(Qwen3Wrapper):
                     epochs_ran = epoch + 1
                     picks = rng.sample(train_idx, min(samples_per_epoch, len(train_idx)))
                     running = 0.0
-                    for step, idx in enumerate(picks):
+                    pbar = tqdm(picks, desc=f"Learned-TV/{loss} ep{epoch + 1}/{epochs}",
+                                leave=False, disable=not verbose)
+                    for step, idx in enumerate(pbar):
                         optimizer.zero_grad(set_to_none=True)
                         loss_t = sample_loss(idx)
                         loss_t.backward()
@@ -196,6 +198,7 @@ class LearnedTVWrapper(Qwen3Wrapper):
                                 "no gradient reached theta — injection hook not in the graph"
                         optimizer.step()
                         running += loss_t.item()
+                        pbar.set_postfix(loss=f"{running / (step + 1):.3f}")
                         if (step + 1) % 32 == 0:
                             torch.cuda.empty_cache()
                     score = val_score()
