@@ -236,6 +236,8 @@ def main(args):
                             test_few_logits, test_ltv_logits, is_qwen='Qwen' in args.model_name
                         )
                         ltv_metrics["d_NTP"] = mean_d_NTP_ltv
+                        # Label-logit-space MSE on the same (N, K) tensors as d_NTP.
+                        ltv_metrics.update(metric.compute_L_mse_logit(test_few_logits, test_ltv_logits))
 
                     # L_MSE (paper eq. 11): E_x ||h_icl - h_tv||^2 at the final-layer
                     # label position. h_tv is captured from the actual injected forward
