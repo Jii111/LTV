@@ -69,6 +69,36 @@ def compute_L_mse(
     return {"L_mse": l_mse, "L_mse_per_dim": l_mse_per_dim}
 
 
+def compute_L_mse_logit(
+    logits_icl: "Union[torch.Tensor, List[torch.Tensor]]",
+    logits_tv: "Union[torch.Tensor, List[torch.Tensor]]",
+) -> Dict[str, float]:
+    """
+    Label-restricted, logit-space companion of L_MSE:
+        L_mse_logit = E_x[ || z_icl(x) - z_tv(x) ||_2^2 ],
+    where z = W_C h are the label first-token logits — the same (N, K)
+    tensors d_NTP uses, and the z / z~ of the Prop. 5.1 proof (so
+    d_NTP <= C2 * sqrt(L_mse_logit) directly, without C1).
+    Sum over the K label logits, mean over queries; the per-class
+    variant divides by K for cross-benchmark comparability.
+    """
+    if isinstance(logits_icl, list):
+        logits_icl = torch.cat(logits_icl, dim=0)
+    if isinstance(logits_tv, list):
+        logits_tv = torch.cat(logits_tv, dim=0)
+
+    if logits_icl.numel() == 0 or logits_tv.numel() == 0:
+        return {"L_mse_logit": 0.0, "L_mse_logit_per_class": 0.0}
+
+    assert logits_icl.shape == logits_tv.shape, (
+        f"Shape mismatch: {tuple(logits_icl.shape)} vs {tuple(logits_tv.shape)}"
+    )
+
+    sq = (logits_icl.float() - logits_tv.float()).pow(2)
+    return {"L_mse_logit": sq.sum(dim=-1).mean().item(),
+            "L_mse_logit_per_class": sq.mean().item()}
+
+
 def plot_d_NTP(
     datasets_map: Dict[str, Dict[str, List[float]]],
     save_path: str,
