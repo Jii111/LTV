@@ -12,6 +12,23 @@ config['bs'] = 16  # batch size
 config['run_baseline'] = True
 config['run_ltv'] = True
 
+# Learned-TV baseline (Yang et al., ICLR 2026): gradient-trained single vector,
+# injected at the input of one decoder layer at the label position.
+config['run_learned_tv'] = True
+config['learned_tv'] = {
+    'losses': ['lmse', 'ce'],  # 'lmse': label-free, trains on our eq.-11 proxy vs ICL hiddens
+                               # 'ce'  : paper-faithful gold-label cross-entropy (reviewer-facing row)
+    'layer': 'mid',            # their best configuration: middle decoder layer
+    'lr': 1e-3,                # paper text (their released code uses 5e-3)
+    'weight_decay': 0.01,
+    'epochs': 10,
+    'samples_per_epoch': 100,
+    'patience': 2,
+    'val_ratio': 0.2,          # 80/20 train/val split of the anchor pool
+    'num_train_queries': 256,  # same anchor budget as LTV ('ce' additionally consumes gold labels)
+    'init_scale': 0.1,
+}
+
 # Experiment settings
 config['return_logits'] = True
 config['run_num'] = 1

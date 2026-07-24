@@ -25,6 +25,7 @@ import core.metric as metric
 import core.utils.utils as utils
 import core.utils.utils_method as um
 from core.wrapper_ltv import LTVWrapper
+from core.wrapper_learned_tv import LearnedTVWrapper
 
 task_queue = None
 
@@ -42,9 +43,9 @@ def print_result(label: str, result) -> None:
 def init_result_dict() -> dict:
     result_dict = {
         'test_result': {
-            'zero_shot': [], 'few_shot': [], 'ltv': []
+            'zero_shot': [], 'few_shot': [], 'ltv': [], 'learned_tv': []
         },
-        'time': {'ltv': []}
+        'time': {'ltv': [], 'learned_tv': []}
     }
     return result_dict
 
@@ -292,7 +293,96 @@ def main(args):
 
             result_dict['test_result']['ltv'].append(ltv_test_dict)
             del ltv_wrapper
-            
+
+        # ====== Learned-TV baseline (Yang et al., ICLR 2026) ======
+        if cfg.get('run_learned_tv', False):
+            lt_cfg = cfg.get('learned_tv', {})
+            lt_wrapper = LearnedTVWrapper(model, tokenizer, model_config, args.device)
+
+            exclude_demo = set(demon_indices) if demon_indices is not None else set()
+            lt_queries, lt_indices = utils.build_train_queries(
+                train_dataset, lt_cfg.get('num_train_queries', 256),
+                exclude_indices=exclude_demo,
+            )
+            lt_labels = [train_dataset.apply_template(train_dataset.all_data[i])[2]
+                         for i in lt_indices]
+            options = train_dataset.get_dmonstration_template()['options']
+            losses = lt_cfg.get('losses', ['lmse'])
+
+            icl_targets = None
+            if 'lmse' in losses:
+                icl_targets = lt_wrapper.collect_icl_hidden(
+                    baseline_demon, lt_queries, tokenizer,
+                    batch_size=extraction_batch_size,
+                )
+
+            lt_entry = {}
+            for loss_name in losses:
+                print(f"Learned-TV ({loss_name}): training "
+                      f"(layer={lt_cfg.get('layer', 'mid')}, lr={lt_cfg.get('lr', 1e-3)})...")
+                lt_start = time.time()
+                theta, train_info = lt_wrapper.train_learned_tv(
+                    queries=lt_queries, labels=lt_labels, tokenizer=tokenizer,
+                    model_name=args.model_name, options=options,
+                    loss=loss_name, icl_targets=icl_targets,
+                    layer=lt_cfg.get('layer', 'mid'),
+                    lr=lt_cfg.get('lr', 1e-3),
+                    weight_decay=lt_cfg.get('weight_decay', 0.01),
+                    epochs=lt_cfg.get('epochs', 10),
+                    samples_per_epoch=lt_cfg.get('samples_per_epoch', 100),
+                    patience=lt_cfg.get('patience', 2),
+                    val_ratio=lt_cfg.get('val_ratio', 0.2),
+                    init_scale=lt_cfg.get('init_scale', 0.1),
+                    seed=seed + run_id,
+                )
+                train_time = time.time() - lt_start
+
+                print(f"Learned-TV ({loss_name}): evaluating...")
+                test_lt_hidden = None
+                with lt_wrapper.inject_learned_tv(theta, train_info['layer_idx']):
+                    lt_out = test_evaluator.evaluate(
+                        lt_wrapper, tokenizer, demonstration='',
+                        use_cache=use_cache,
+                        return_logits=return_logits,
+                        return_hidden=compute_L_mse,
+                    )
+                if compute_L_mse:
+                    test_lt, test_lt_logits, test_lt_labels, test_lt_hidden = lt_out
+                else:
+                    test_lt, test_lt_logits, test_lt_labels = lt_out
+                lt_metrics = dict(test_lt) if isinstance(test_lt, dict) else {"result": test_lt}
+                lt_metrics.update({'loss': loss_name, 'train_time_sec': round(train_time, 3),
+                                   **{f'train_{k}': v for k, v in train_info.items()}})
+                result_dict['time']['learned_tv'].append(train_time)
+                print_result(f"Test Learned-TV ({loss_name})", test_lt)
+
+                # Same alignment metrics as the LTV block, vs the same ICL reference.
+                if cfg.get('compute_d_NTP', False) and test_few_labels == test_lt_labels:
+                    lt_metrics["d_NTP"] = metric.compute_d_NTP(
+                        test_few_logits, test_lt_logits, is_qwen='Qwen' in args.model_name
+                    )
+                    lt_metrics.update(metric.compute_L_mse_logit(test_few_logits, test_lt_logits))
+                    if test_zero_logits is not None and test_zero_labels == test_few_labels:
+                        lt_metrics["d_NTP_zero_ref"] = metric.compute_d_NTP(
+                            test_few_logits, test_zero_logits, is_qwen='Qwen' in args.model_name
+                        )
+                        lt_metrics["L_mse_logit_zero_ref"] = metric.compute_L_mse_logit(
+                            test_few_logits, test_zero_logits)["L_mse_logit"]
+                if compute_L_mse and test_few_hidden is not None and test_lt_hidden is not None \
+                        and test_few_labels == test_lt_labels:
+                    lt_metrics.update(metric.compute_L_mse(test_few_hidden, test_lt_hidden))
+                    if test_zero_hidden is not None:
+                        lt_metrics["L_mse_zero_ref"] = metric.compute_L_mse(
+                            test_few_hidden, test_zero_hidden)["L_mse"]
+                    print_result(f"Test Learned-TV ({loss_name}) L_mse",
+                                 {k: v for k, v in lt_metrics.items() if k.startswith("L_mse")})
+
+                lt_entry[loss_name] = lt_metrics
+
+            result_dict['test_result']['learned_tv'].append(lt_entry)
+            del lt_wrapper
+            torch.cuda.empty_cache()
+
     with open(os.path.join(args.save_dir, 'result_dict.json'), 'w') as f:
         json.dump(result_dict, f, indent=4)
     del base_wrapper, model, tokenizer
