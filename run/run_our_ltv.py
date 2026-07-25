@@ -445,7 +445,6 @@ def main(args):
                     weight_decay=la_cfg.get('weight_decay', 0.0),
                     epochs=la_cfg.get('epochs', 10),
                     samples_per_epoch=la_cfg.get('samples_per_epoch', 100),
-                    patience=la_cfg.get('patience', 2),
                     val_ratio=la_cfg.get('val_ratio', 0.2),
                     init=la_cfg.get('init', 'zero'),
                     example_separator=cfg['example_separator'],

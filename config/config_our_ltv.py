@@ -36,16 +36,15 @@ config['run_learnable_tv'] = True
 config['learnable_tv'] = {
     'losses': ['ce', 'lmse'],  # 'ce'  : paper-faithful, CE on label-shuffled k-shot ICL prompts
                                # 'lmse': label-free variant on our eq.-11 proxy (our addition)
-    'k_shot': 10,              # shots in the shuffled CE prompts (their README setting)
+    'k_shot': 30,              # shuffled CE prompts reuse our 30-shot demonstration
     'lr': 5e-5,                # their Adam lr (no weight decay)
     'weight_decay': 0.0,
-    'init': 'zero',            # zero-init Phi: neutral start (v=0), safe early stopping, fair
-                               # matched-budget number. Repo uses randn but trains 64x longer.
+    'init': 'zero',            # zero-init Phi: neutral start (v=0). Repo uses randn but trains
+                               # 64x longer, which a matched budget cannot escape from.
     'epochs': 12,
-    'samples_per_epoch': 200,  # ~2400 batch-1 steps: all-layer Phi needs more than a single vector
-    'patience': 3,
-    'val_ratio': 0.2,
-    'num_train_queries': 256,  # same anchor budget as LTV (basis + 'ce' labels)
+    'samples_per_epoch': 200,  # ~2400 batch-1 steps; selection = lowest epoch train loss (paper rule)
+    'val_ratio': 0.2,          # held-out slice used ONLY for the convergence diagnostic
+    'num_train_queries': 256,  # same anchor budget as LTV; 'ce' also uses their gold labels
 }
 
 # Experiment settings

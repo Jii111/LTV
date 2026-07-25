@@ -195,7 +195,6 @@ class LearnableTVWrapper(Qwen3Wrapper):
         weight_decay: float = 0.0,
         epochs: int = 10,
         samples_per_epoch: int = 100,
-        patience: int = 2,
         val_ratio: float = 0.2,
         init: str = 'zero',
         example_separator: str = '\n',
@@ -204,14 +203,18 @@ class LearnableTVWrapper(Qwen3Wrapper):
     ) -> Tuple[torch.Tensor, Dict[str, Any]]:
         """Train Phi (n_layers x n_heads) with the LLM frozen.
 
-        init: 'randn' reproduces the repo's Gaussian init (ltv.py:17), but on
+        Selection follows the released code: fixed number of steps, keep the
+        lowest-training-loss checkpoint, no early stopping (their
+        `lowest_val_loss` is the current training batch loss and
+        `early_stoppage_tolerance` never breaks the loop). `val_ratio` carves
+        out a held-out slice used ONLY to log a convergence diagnostic.
+
+        init: 'randn' reproduces the repo's Gaussian init (ltv.py:17). On
         all-layer injection that is a large harmful perturbation at step 0 and
-        needs their 2000-iter x batch-32 budget to escape; under our matched
-        256-anchor budget patience-based early stopping would then ship a
-        near-random vector and report an unfairly-low baseline. 'zero' (our
-        default) starts at v=0 (injection is a no-op, so validation begins at
-        the zero-shot floor and improves monotonically), which makes early
-        stopping safe and the matched-budget number fair. Documented deviation.
+        needs their 2000-iter x batch-32 budget to escape, so under a matched
+        256-anchor budget it can leave the vector near-random. 'zero' (our
+        default) starts at v = 0, i.e. injection is a no-op, so training begins
+        at the zero-shot floor and improves from there. Documented deviation.
         """
         assert loss in ('ce', 'lmse'), loss
         assert init in ('zero', 'randn'), init
@@ -280,9 +283,14 @@ class LearnableTVWrapper(Qwen3Wrapper):
             return F.cross_entropy(logit, gold)
 
         @torch.no_grad()
-        def val_score() -> float:
-            """Deployment-regime validation (zero-shot prompts + injection);
-            higher is better for both objectives."""
+        def val_diagnostic() -> float:
+            """Held-out diagnostic ONLY — never used for model selection (the
+            paper selects by training loss). For 'ce' this is label-restricted
+            accuracy, i.e. the same decision rule as our Evaluator, so the curve
+            is comparable to the reported numbers; for 'lmse' it is negative
+            per-dim MSE. Higher is better in both cases."""
+            if not val_idx:
+                return float('nan')
             if loss == 'lmse':
                 assert icl_targets is not None
                 total = 0.0
@@ -292,19 +300,28 @@ class LearnableTVWrapper(Qwen3Wrapper):
                     total += (h - icl_targets[idx].to(device)).pow(2).mean().item()
                 return -total / len(val_idx)
             correct = 0
+            gold_tensor = torch.tensor(gold_ids, device=device)
             for idx in val_idx:
                 out = forward_prompt(queries[idx], need_hidden=False)
-                if out.logits[0, -1, :].argmax().item() == gold_ids[labels[idx]]:
+                label_logits = out.logits[0, -1, :].index_select(0, gold_tensor)
+                if label_logits.argmax().item() == labels[idx]:
                     correct += 1
             return correct / len(val_idx)
 
-        best_score, best_phi, no_improve, epochs_ran = None, None, 0, 0
+        # Model selection follows the released code (train.py:114-128): keep the
+        # checkpoint with the lowest TRAINING loss and run a fixed number of
+        # steps — their `lowest_val_loss` is the current training batch loss and
+        # `early_stoppage_tolerance` never breaks the loop. We compare epoch-mean
+        # training loss rather than a single step's, because we run batch 1 where
+        # per-step loss is far noisier than their batch of 32.
+        best_train_loss, best_phi, epochs_ran = None, None, 0
+        curve = []
         try:
             with torch.enable_grad():
                 for epoch in range(epochs):
                     epochs_ran = epoch + 1
                     picks = rng.sample(train_idx, min(samples_per_epoch, len(train_idx)))
-                    running = 0.0
+                    running, counted = 0.0, 0
                     pbar = tqdm(picks, desc=f"Learnable-TV/{loss} ep{epoch + 1}/{epochs}",
                                 leave=False, disable=not verbose)
                     for step, idx in enumerate(pbar):
@@ -318,21 +335,20 @@ class LearnableTVWrapper(Qwen3Wrapper):
                                 "no gradient reached Phi — injection hooks not in the graph"
                         torch.nn.utils.clip_grad_norm_([phi], max_norm=1.0)
                         optimizer.step()
-                        running += loss_t.item()
-                        pbar.set_postfix(loss=f"{running / (step + 1):.3f}")
+                        running += loss_t.item(); counted += 1
+                        pbar.set_postfix(loss=f"{running / max(counted, 1):.3f}")
                         if (step + 1) % 32 == 0:
                             self._empty_cache()
-                    score = val_score()
+                    train_loss = running / max(counted, 1)
+                    val_diag = val_diagnostic()
+                    curve.append({'epoch': epoch + 1, 'train_loss': train_loss,
+                                  'val_diagnostic': val_diag})
                     if verbose:
                         print(f"[Learnable-TV/{loss}] epoch {epoch + 1}/{epochs} "
-                              f"train_loss {running / len(picks):.4f} val_score {score:.4f}")
-                    if best_score is None or score > best_score:
-                        best_score, no_improve = score, 0
+                              f"train_loss {train_loss:.4f} val_diag {val_diag:.4f}")
+                    if best_train_loss is None or train_loss < best_train_loss:
+                        best_train_loss = train_loss
                         best_phi = phi.detach().clone()
-                    else:
-                        no_improve += 1
-                        if no_improve >= patience:
-                            break
         finally:
             for h in handles:
                 h.remove()
@@ -342,8 +358,10 @@ class LearnableTVWrapper(Qwen3Wrapper):
             best_phi = phi.detach().clone()
         self.phi = best_phi.cpu()
         info = {'loss': loss, 'lr': lr, 'init': init, 'epochs_ran': epochs_ran,
-                'best_val_score': best_score, 'num_train': len(train_idx),
-                'num_val': len(val_idx), 'k_shot_shuffled': k_shot if loss == 'ce' else None}
+                'selection': 'lowest_epoch_train_loss (paper rule)',
+                'best_train_loss': best_train_loss, 'curve': curve,
+                'num_train': len(train_idx), 'num_val_diagnostic': len(val_idx),
+                'k_shot_shuffled': k_shot if loss == 'ce' else None}
         return self.phi, info
 
     # ------------------------------------------------------------------
