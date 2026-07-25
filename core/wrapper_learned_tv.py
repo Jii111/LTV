@@ -211,7 +211,11 @@ class LearnedTVWrapper(Qwen3Wrapper):
                     train_loss = running / len(picks)
                     score = val_score()
                     curve.append({'epoch': epoch + 1, 'train_loss': train_loss,
-                                  'val_score': score})
+                                  'val_score': score,
+                                  # records the per-sample linear decay so the
+                                  # schedule is verifiable from the result JSON
+                                  'lr': scheduler.get_last_lr()[0],
+                                  'theta_l2': theta.detach().norm().item()})
                     if verbose:
                         print(f"[Learned-TV/{loss}] epoch {epoch + 1}/{epochs} "
                               f"train_loss {train_loss:.4f} val_score {score:.4f}")
@@ -233,7 +237,12 @@ class LearnedTVWrapper(Qwen3Wrapper):
         info = {'layer_idx': layer_idx, 'loss': loss, 'lr': lr,
                 'selection': 'best val accuracy, patience early stop (paper rule)',
                 'epochs_ran': epochs_ran, 'best_val_score': best_score, 'curve': curve,
-                'num_train': len(train_idx), 'num_val': len(val_idx)}
+                'num_train': len(train_idx), 'num_val': len(val_idx),
+                'theta_numel': int(theta.numel()), 'total_steps': total_steps,
+                'final_lr': scheduler.get_last_lr()[0],
+                # unlike Learnable-TV this budget is not scale-limited:
+                # reachable travel (steps x lr) vs the U(-init_scale, init_scale) start
+                'max_travel_per_entry': total_steps * lr, 'init_scale': init_scale}
         return self.theta, info
 
     # ------------------------------------------------------------------
