@@ -133,11 +133,18 @@ class LearnedTVWrapper(Qwen3Wrapper):
         theta = ((torch.rand(self.embed_dim, generator=gen) * 2 - 1) * init_scale)
         theta = theta.to(device=device, dtype=torch.float32).requires_grad_(True)
         optimizer = torch.optim.AdamW([theta], lr=lr, weight_decay=weight_decay)
-        # Their trainer steps a linear-decay schedule once per sample
-        # (train_ltv.py:110-115, hidden_states.py:1330).
-        total_steps = max(1, epochs * min(samples_per_epoch, max(len(train_idx), 1)))
+        # Their trainer steps a linear-decay schedule once per sample, but sizes it
+        # with num_training_steps = num_epochs * len(train_set) while only sampling
+        # `samples_per_epoch` items per epoch (train_ltv.py: get_scheduler(...,
+        # num_training_steps=num_epochs * len(train_set)) vs
+        # train_set.select(random.sample(..., 100))). So the LR decays only
+        # partially -- 5e-3 -> ~4.2e-3 over their 1000 actual steps. We reproduce
+        # that denominator rather than decaying to 0 over the steps we really take,
+        # which would halve the average LR and handicap the baseline.
+        sched_steps = max(1, epochs * max(len(train_idx), 1))
+        actual_steps = max(1, epochs * min(samples_per_epoch, max(len(train_idx), 1)))
         scheduler = torch.optim.lr_scheduler.LambdaLR(
-            optimizer, lambda s: max(0.0, 1.0 - s / total_steps))
+            optimizer, lambda s: max(0.0, 1.0 - s / sched_steps))
 
         def pre_hook(mod, args, kwargs):
             hidden = args[0] if args else kwargs['hidden_states']
@@ -238,11 +245,12 @@ class LearnedTVWrapper(Qwen3Wrapper):
                 'selection': 'best val accuracy, patience early stop (paper rule)',
                 'epochs_ran': epochs_ran, 'best_val_score': best_score, 'curve': curve,
                 'num_train': len(train_idx), 'num_val': len(val_idx),
-                'theta_numel': int(theta.numel()), 'total_steps': total_steps,
+                'theta_numel': int(theta.numel()), 'total_steps': actual_steps,
+                'scheduler_steps': sched_steps,
                 'final_lr': scheduler.get_last_lr()[0],
                 # unlike Learnable-TV this budget is not scale-limited:
                 # reachable travel (steps x lr) vs the U(-init_scale, init_scale) start
-                'max_travel_per_entry': total_steps * lr, 'init_scale': init_scale}
+                'max_travel_per_entry': actual_steps * lr, 'init_scale': init_scale}
         return self.theta, info
 
     # ------------------------------------------------------------------

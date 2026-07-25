@@ -205,7 +205,7 @@ Verified from the released code:
 | | labeled examples | gradient updates | training prompts |
 |---|---|---|---|
 | **LTV (ours)** | **30** (the demonstration only) | **0** (closed form) | — |
-| **Learned-TV** (Yang) | ~1,000 (600 train + 400 val from a 1,000-example pool) | 1,000 (10 epochs × 100, batch 1) | **zero-shot** prompts |
+| **Learned-TV** (Yang) | ~1,000 labeled prompts (600 train + 400 val, split 60/40 from a 1,000-query pool; demos drawn from a separate 10,000-example pool) | up to 1,000 (10 epochs × 100 sampled items, batch 1, patience 2) — **per layer, repeated for all 32 layers** | **zero-shot** prompts (`train_set.pt` holds `zsl_prompts`) |
 | **Learnable-TV** (Saglam) | thousands (full train/test split) | 2,000 iters × batch 32 = **64,000** sample-gradients, plus a basis resampled from 100 clean prompts *every iteration* → **≈264,000 forward passes** | label-shuffled k-shot ICL prompts |
 
 Note what that budget is *not* buying: Learnable-TV's Φ is only
@@ -287,7 +287,9 @@ so the prompt differs every step even though the underlying pool is fixed.
 | **Learnable-TV: cached basis** (paper resamples per iteration) | our demonstration is fixed, so recomputation returns the same value; they resample (100 clean prompts × 2000 iters) because their prompts change every step. This is where most of their ~264,000 forward passes go, and it is the deviation that actually shrinks our cost. |
 | **Learnable-TV: `lmse` trains on per-dim MSE** | the eq.-11 **sum** (~10³–10⁴) overflows fp16 backward through 32-layer injection (produced NaN). Per-dim has the identical optimum; reported L_MSE is computed separately, so metrics are unaffected. Grad-norm clipping and a non-finite-step guard are also applied. |
 | **Learnable-TV: selection = lowest epoch-mean training loss** | this *is* the paper's rule — their `lowest_val_loss` is the current training-batch loss and `early_stoppage_tolerance` never breaks the loop. We compare epoch means because we run batch 1, where per-step loss is far noisier than their batch of 32. A held-out slice is still evaluated but **only logged** as a convergence diagnostic. |
-| **Learned-TV: paper-text lr 1e-3** | the released code hardcodes 5e-3 while the paper text says 1e-3; we follow the paper. Their per-sample linear-decay schedule **is** reproduced. |
+| **Learned-TV: paper-text lr 1e-3** | the released code hardcodes 5e-3 while the paper text says 1e-3; we follow the paper. ⚠️ **Worth re-checking against the paper PDF** — if 5e-3 is correct, that is the setting favourable to the baseline and we should switch. |
+| **Learned-TV: partial LR decay reproduced** | their scheduler is sized `num_epochs × len(train_set)` (= 6000) but only `samples_per_epoch` items are stepped per epoch (= 1000 steps), so their LR decays only 5e-3 → ~4.2e-3. We reproduce that *denominator* (ours ends at 51% of base) rather than decaying to 0 over the steps actually taken, which would halve the average LR and handicap the baseline. |
+| **Learned-TV: single injection layer (`mid`)** ⚠️ | their `train_ltv.py` loops `for i in range(num_layer)`, training a **separate θ for every one of the 32 layers** and selecting the best afterwards. Reproducing that is 32× the cost, so we fix the middle layer, which their paper reports as the best configuration. This is the one place where the baseline gets materially less than the original, and it should be stated in the caption — it plausibly contributes to Learned-TV `lmse` scoring below zero-shot on sst2. |
 | Both: batch 1 | matches Learned-TV exactly; for Learnable-TV it is a reduction from batch 32 (see 2.6). |
 
 ## 2.6 Learnable-TV: the budget knob is `lr`, not the step count
