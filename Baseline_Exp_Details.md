@@ -63,39 +63,47 @@ config['run_ltv']           = True   # ours
 config['run_learned_tv']    = True   # Yang et al.
 config['run_learnable_tv']  = True   # Saglam et al.
 
-config['learned_tv']   = {'losses': ['ce', 'lmse'], ...}
-config['learnable_tv'] = {'losses': ['ce', 'lmse'], ...}
+config['learned_tv']   = {'losses': ['lmse'], 'epochs': 8, 'samples_per_epoch': 100, ...}
+config['learnable_tv'] = {'losses': ['ce'],   'epochs': 8, 'samples_per_epoch': 100, ...}
 ```
 
-`losses` picks which variants to train (both run by default):
-- **`ce`** — the paper's own objective (gold-label cross-entropy)
-- **`lmse`** — our eq.-11 proxy against ICL teacher hidden states (label-free)
+**One variant per baseline is reported** (see PART 2 for why):
 
-See PART 2 for why both exist.
+| baseline | variant run | reason |
+|---|---|---|
+| Learned-TV (Yang) | **`lmse`** | their method is not ICL-based at all, so the ICL-based variant is the comparable row |
+| Learnable-TV (Saglam) | **`ce`** | their method *is* ICL-based, so their own gold-label objective is the faithful row |
 
-## 1.4 Runtime
+Both objectives stay implemented — add `'ce'` / `'lmse'` to the respective
+`losses` list to run the other one too (roughly doubles that baseline's cost).
+
+Training budget is `epochs × samples_per_epoch` batch-1 steps: **1000 for
+Learned-TV**, **800 for Learnable-TV**. Read the per-epoch `curve` in the result
+JSON before changing either — and for Learnable-TV read 2.6 first, because for
+that method the step count is *not* the knob that matters.
+
+## 1.4 Runtime (single GPU)
 
 Measured on one A100-40GB MIG slice, Llama-3.1-8B in 8-bit, 500 test samples,
-256 anchors, 30-shot demos:
+256 anchors, 30-shot demos, 800 training steps per baseline:
 
-| configuration | per (dataset, run) | full 8 datasets × 5 runs |
+| component | measured | note |
 |---|---|---|
-| `losses: ['lmse']` only | ~25 min | ~17 h |
-| `losses: ['ce','lmse']` (default) | **~45 min** | **~30 h** |
+| LTV (ours) | **16 s** | closed form — effectively free |
+| Learned-TV `lmse` | **7.1 min** | 0.53 s/step; zero-shot prompts (~30 tokens) |
+| Learnable-TV `lmse` | 9.7 min | 0.73 s/step; zero-shot prompts |
+| Learnable-TV **`ce`** | *not yet measured* | prompts are 30-shot (**~600 tokens, ~20× longer**), so expect meaningfully more than the `lmse` figure |
+| evaluation (5 passes × 500) + basis / ICL-target collection | ~7.4 min | |
 
-Most of the cost is batch-1 gradient training (both baselines), not evaluation.
+With the shipped configuration (Yang `lmse` + Saglam `ce`) the per-(dataset,run)
+cost is therefore **~7 min + [Saglam ce] + ~8 min**. Until `ce` is measured, plan
+for roughly **35–50 min per cell → 23–33 h for the full 8 datasets × 5 runs** on
+a single GPU, and refine the estimate from the first dataset's `[ETA]` lines,
+which report the real per-cell time as soon as one cell completes.
 
-**To parallelize**, split the dataset list across GPUs — datasets are independent:
-
-```bash
-# GPU 0
-sed "s/^config\['datasets'\].*/config['datasets'] = ['sst2','sst5']/" \
-    config/config_our_ltv.py > config/_run_a.py
-CUDA_VISIBLE_DEVICES=0 .venv/bin/python -u run/run_our_ltv.py --config_path config/_run_a.py
-# GPU 1: ['mr','subj'] · GPU 2: ['trec','hate_speech18'] · GPU 3: ['agnews','dbpedia']
-```
-
-4 GPUs → roughly 7–8 hours wall-clock.
+Cheaper options if that is too long: drop `run_num` to 3, or run a subset of
+`datasets` first — every dataset writes its own `result_dict.json`, so the sweep
+can be resumed dataset by dataset.
 
 ## 1.5 Progress / ETA logging
 
@@ -195,7 +203,11 @@ Verified from the released code:
 |---|---|---|---|
 | **LTV (ours)** | **30** (the demonstration only) | **0** (closed form) | — |
 | **Learned-TV** (Yang) | ~1,000 (600 train + 400 val from a 1,000-example pool) | 1,000 (10 epochs × 100, batch 1) | **zero-shot** prompts |
-| **Learnable-TV** (Saglam) | thousands (full train/test split) | **64,000** sample-gradients (2,000 iters × batch 32) | label-shuffled k-shot ICL prompts |
+| **Learnable-TV** (Saglam) | thousands (full train/test split) | 2,000 iters × batch 32 = **64,000** sample-gradients, plus a basis resampled from 100 clean prompts *every iteration* → **≈264,000 forward passes** | label-shuffled k-shot ICL prompts |
+
+Note what that budget is *not* buying: Learnable-TV's Φ is only
+`n_layers × n_heads` (448 for their GPT-J, 1024 for our Llama-3.1-8B), and
+Learned-TV's θ is a single 4096-vector. Neither is capacity-bound — see 2.6.
 
 Our LTV solves a closed-form ridge problem from **30 labeled demonstrations +
 256 _unlabeled_ anchor queries**. Learned-TV uses ~30× more labels;
@@ -209,10 +221,19 @@ Every baseline gets **exactly the resources our LTV gets**:
 - the **same 256 anchor queries**,
 - the same 500-example test split, the same 5 runs, the same evaluator.
 
-We do **not** touch the baselines' own hyperparameters — optimizer, lr, weight
-decay, init, injection site, batch size and selection rule are all theirs. What
-we match is the *data budget*; otherwise the table would read "our method with 30
-labels vs. their method with 64,000".
+We keep the baselines' own design decisions — optimizer, weight decay,
+injection site, objective and selection rule are all theirs. What we match is
+the *data budget*; otherwise the table would read "our method with 30 labels
+vs. their method with 64,000".
+
+The one place we deviate on a hyperparameter is **Learnable-TV's init and lr**,
+and only to keep the method *functional* at the shortened schedule: its Φ scale
+is set by the paper's `randn` init rather than by training, so a shortened run
+with our zero-init leaves the injected vector at ~0. We re-couple `steps × lr`
+to that scale instead. Full derivation, measurements and the exact reproduction
+setting are in 2.6 — this is a deviation that *helps* the baseline, and it is
+logged per-epoch (`phi_l2`, `phi_shift_l2`) so it can be checked rather than
+taken on trust.
 
 So the claim to make is not *"we beat them"* but **"at an equal resource budget
 this is what each method achieves — and ours needs no labels and no gradients."**
@@ -259,38 +280,63 @@ so the prompt differs every step even though the underlying pool is fixed.
 
 | deviation | why |
 |---|---|
-| **Learnable-TV: zero-init Φ** (paper uses `randn`) | with all-layer injection, `randn` is a large *harmful* perturbation at step 0; the paper escapes it only via its 64,000-forward budget. At a matched budget it would ship a near-random vector and report an unfairly low number. Zero-init starts neutral (`v = 0`, injection is a no-op) and improves from the zero-shot floor. `init: 'randn'` remains available. |
-| **Learnable-TV: cached basis** (paper resamples per iteration) | our demonstration is fixed, so recomputation returns the same value; they resample because their prompts change every step. |
+| **Learnable-TV: zero-init Φ + lr 1e-3** (paper: `randn`, lr 5e-5) | `randn` (std 1) is what sets Φ's scale in the paper — training moves it only ~2% (see 2.6) — and with all-layer injection a random draw is a large harmful perturbation we measured at 0.80 acc, below the 0.89 zero-shot floor. Zero-init starts neutral (`v = 0`, injection is a no-op), and lr is raised so `steps × lr` = 0.8 reaches the scale their init supplies for free. This lets Φ actually be *optimized* rather than perturbed. `init: 'randn', lr: 5e-5` remains available. |
+| **Learnable-TV: cached basis** (paper resamples per iteration) | our demonstration is fixed, so recomputation returns the same value; they resample (100 clean prompts × 2000 iters) because their prompts change every step. This is where most of their ~264,000 forward passes go, and it is the deviation that actually shrinks our cost. |
 | **Learnable-TV: `lmse` trains on per-dim MSE** | the eq.-11 **sum** (~10³–10⁴) overflows fp16 backward through 32-layer injection (produced NaN). Per-dim has the identical optimum; reported L_MSE is computed separately, so metrics are unaffected. Grad-norm clipping and a non-finite-step guard are also applied. |
 | **Learnable-TV: selection = lowest epoch-mean training loss** | this *is* the paper's rule — their `lowest_val_loss` is the current training-batch loss and `early_stoppage_tolerance` never breaks the loop. We compare epoch means because we run batch 1, where per-step loss is far noisier than their batch of 32. A held-out slice is still evaluated but **only logged** as a convergence diagnostic. |
 | **Learned-TV: paper-text lr 1e-3** | the released code hardcodes 5e-3 while the paper text says 1e-3; we follow the paper. Their per-sample linear-decay schedule **is** reproduced. |
 | Both: batch 1 | matches Learned-TV exactly; for Learnable-TV it is a reduction from batch 32 (see 2.6). |
 
-## 2.6 Known limitation and the follow-up run that is still required
+## 2.6 Learnable-TV: the budget knob is `lr`, not the step count
 
-At a matched budget Learnable-TV gets ~800–2,400 updates versus the paper's
-64,000 sample-gradients. In our first SST-2 sweep its `L_mse_logit` stayed at
-254 while the zero-shot reference is 255 — i.e. **the logit distribution barely
-moved**, which indicates undertraining rather than a weak method.
+Our first SST-2 sweep showed Learnable-TV's `L_mse_logit` stuck at 254 against a
+zero-shot reference of 255 — the logit distribution barely moved. The obvious
+reading is undertraining, and the obvious fix is more steps. **Both are wrong**,
+and the arithmetic says why.
 
-Therefore, **before this baseline's number is reported anywhere**, run a
-higher-budget variant and show the convergence curve:
+Φ is only `(n_layers × n_heads)` = **32 × 32 = 1024 scalars**, so the paper's
+2000 iterations are not a capacity requirement. Adam's per-step update is
+`lr·m̂/(√v̂+ε)`, whose magnitude is at most ≈ `lr`, so **total travel per entry
+is bounded by `steps × lr`**. Their init is `torch.randn`, i.e. std 1
+(`ltv.py:17`; the `normalized_weights` in `forward` is a misnomer — nothing is
+normalized). Measured on a 32×32 tensor with maximally consistent gradients:
 
-```python
-config['learnable_tv']['epochs'] = 20            # or
-config['learnable_tv']['samples_per_epoch'] = 400
-```
+| setting | `steps × lr` | measured max\|ΔΦ\| | final mean\|Φ\| |
+|---|---|---|---|
+| `randn`, lr 5e-5, 2000 (**paper**) | 0.100 | 0.0998 | 0.790 *(init was 0.810)* |
+| `zero`, lr 5e-5, 800 | 0.040 | 0.0400 | **0.039** |
+| `zero`, lr 5e-5, 2400 | 0.120 | 0.1198 | **0.116** |
+| `zero`, lr 1e-3, 800 (**shipped**) | 0.800 | 0.7886 | 0.650 |
 
-then read `curve` in the result JSON. The goal is not to make the baseline win
-or lose but to demonstrate **saturation**: if the held-out diagnostic plateaus
-and the method still trails LTV, the conclusion is robust; if it keeps
-improving, the matched-budget number was a budget artifact and must be labeled
-as such.
+Two conclusions:
 
-Note that raising the *batch* at a fixed forward budget does the opposite of
-what is needed — it reduces the number of optimizer updates (e.g. 800 → 25). The
-correct knob is **more updates**, optionally with gradient accumulation for a
-modest effective batch.
+1. **Under the paper's own budget, training moves Φ by ~2% of its magnitude.**
+   Φ's scale — and most of its layer/head mixing — is set by the *random init*,
+   not by the optimizer. The method's power lives in the basis `P[l]` (mean ICL
+   attention output, resampled from 100 clean prompts every step), with Φ acting
+   as a light reweighting on top.
+2. **Therefore step count is nearly inert here.** Going 800 → 2400 raises the
+   reachable scale from 0.04 to 0.12, both far below the 0.81 the paper's init
+   supplies for free. Tripling the most expensive stage in the sweep would buy
+   essentially nothing — which is why the shipped config does *not* do it.
+
+What actually broke the baseline was our own zero-init: it removes the scale
+setter, and at lr 5e-5 no step count recovers it. The shipped fix holds
+`steps × lr` at the scale Φ must reach (`zero` + lr 1e-3 → 0.65 ≈ the paper's
+0.81) rather than inflating steps. This is the *generous* choice for the
+baseline: it lets Φ actually be optimized instead of fine-tuning a random draw.
+
+**Before this baseline's number is reported anywhere**, check `curve` in the
+result JSON, which now logs `phi_l2`, `phi_shift_l2` and `val_diagnostic` per
+epoch. The bar is **saturation**, not a target step count: if the diagnostic
+plateaus with `phi_l2` in the same range as the paper's init and the method
+still trails LTV, the conclusion is robust. If `phi_l2` is an order of magnitude
+low, the run is scale-limited and the number must not be reported.
+
+To reproduce the paper's own combination for comparison, set
+`init: 'randn', lr: 5e-5`. Note that raising the *batch* at a fixed forward
+budget is counterproductive — it cuts the number of optimizer updates (800 → 25)
+while leaving `steps × lr` even smaller.
 
 ---
 

@@ -29,15 +29,28 @@ Objectives (one switch):
          proxy ||h_icl - h(Phi)||^2 on zero-shot prompts against ICL
          teacher hiddens — the same information budget as our LTV.
 
+Selection FOLLOWS the released code: a fixed step count with the
+lowest-training-loss checkpoint kept, and no early stopping. In train.py the
+name `lowest_val_loss` is the current training batch's loss (there is no
+validation set anywhere), and the `early_stoppage_tolerance` branch only
+writes an extra checkpoint — it never breaks the loop, so all `n_iter` steps
+always run. We compare the epoch-mean training loss rather than a single
+step's because we run batch 1, where per-step loss is far noisier than their
+batch of 32. The held-out slice carved out by `val_ratio` is used ONLY to log
+a convergence diagnostic and never influences selection.
+
 Deviations from the released training loop, kept intentional and matched to
 our LTV protocol (documented so the rebuttal caption is accurate):
 - basis computed once from our standard demonstration + 256 anchor queries
-  and cached, rather than resampled from fresh clean prompts every step
-  (train.py:90; a per-step stochastic basis is impractical here and does
-  not change the method);
-- 80/20 train/val split with patience-2 early stopping instead of the
-  repo's fixed 2000-iteration, best-by-training-batch-loss selection
-  (train.py:114-146), matching the harness used for our other baselines.
+  and cached, rather than re-derived every step from a fresh sample of 100
+  clean ICL prompts (train.py:90 `sample_attn_out(..., batch_size=100)`).
+  This is where most of their compute goes — 2000 x (100 + 32) forward
+  passes — and it is the deviation that actually shrinks our cost;
+- budget: `epochs x samples_per_epoch` batch-1 steps in place of their
+  2000 iterations x batch 32. Note their step count is NOT what makes the
+  method work: Adam bounds per-entry travel by ~lr per step, so even their
+  own budget moves Phi only 2000 x 5e-5 = 0.10 against a randn init of
+  std 1. Phi's scale is set by the init, not by the optimizer.
 """
 
 import random
@@ -209,12 +222,15 @@ class LearnableTVWrapper(Qwen3Wrapper):
         `early_stoppage_tolerance` never breaks the loop). `val_ratio` carves
         out a held-out slice used ONLY to log a convergence diagnostic.
 
-        init: 'randn' reproduces the repo's Gaussian init (ltv.py:17). On
-        all-layer injection that is a large harmful perturbation at step 0 and
-        needs their 2000-iter x batch-32 budget to escape, so under a matched
-        256-anchor budget it can leave the vector near-random. 'zero' (our
-        default) starts at v = 0, i.e. injection is a no-op, so training begins
-        at the zero-shot floor and improves from there. Documented deviation.
+        init: 'randn' reproduces the repo's Gaussian init (ltv.py:17), std 1.
+        This matters more than the step count. Adam moves each entry by at most
+        ~lr per step, so total travel is bounded by steps x lr: their own budget
+        gives 2000 x 5e-5 = 0.10, i.e. training only perturbs the random draw by
+        ~10% and it is the INIT, not the optimizer, that sets Phi's scale.
+        Consequently 'zero' init cannot work at their lr (800 x 5e-5 = 0.04, so
+        v stays ~0 and the method degenerates to zero-shot) unless lr is raised
+        to keep steps x lr ~ O(1). Both are documented deviations; `curve`
+        records phi_l2 / phi_shift_l2 per epoch so this is measured, not assumed.
         """
         assert loss in ('ce', 'lmse'), loss
         assert init in ('zero', 'randn'), init
@@ -242,6 +258,7 @@ class LearnableTVWrapper(Qwen3Wrapper):
         else:
             phi = torch.zeros(self.num_layers, n_heads)
         phi = phi.to(device=device, dtype=torch.float32).requires_grad_(True)
+        phi_init = phi.detach().clone()
         optimizer = torch.optim.Adam([phi], lr=lr, weight_decay=weight_decay)
 
         state: Dict[str, Optional[torch.Tensor]] = {'v': None}
@@ -315,7 +332,7 @@ class LearnableTVWrapper(Qwen3Wrapper):
         # training loss rather than a single step's, because we run batch 1 where
         # per-step loss is far noisier than their batch of 32.
         best_train_loss, best_phi, epochs_ran = None, None, 0
-        curve = []
+        curve, grad_checked = [], False
         try:
             with torch.enable_grad():
                 for epoch in range(epochs):
@@ -330,22 +347,42 @@ class LearnableTVWrapper(Qwen3Wrapper):
                         if not torch.isfinite(loss_t):
                             continue  # skip a pathological step rather than poison Adam state
                         loss_t.backward()
-                        if epoch == 0 and step == 0:
+                        if not grad_checked:
+                            # Tripwire on the first step that actually backwards (NOT
+                            # step 0, which may be skipped above): a detached hook
+                            # would leave Phi untrained and silently ship zero-shot.
                             assert phi.grad is not None and phi.grad.abs().sum().item() > 0, \
                                 "no gradient reached Phi — injection hooks not in the graph"
+                            grad_checked = True
                         torch.nn.utils.clip_grad_norm_([phi], max_norm=1.0)
                         optimizer.step()
                         running += loss_t.item(); counted += 1
-                        pbar.set_postfix(loss=f"{running / max(counted, 1):.3f}")
+                        pbar.set_postfix(loss=f"{running / counted:.3f}")
                         if (step + 1) % 32 == 0:
                             self._empty_cache()
-                    train_loss = running / max(counted, 1)
+                    if counted == 0:
+                        # Every step was non-finite: no update landed. Scoring this
+                        # epoch would hand it train_loss 0.0 and win selection.
+                        if verbose:
+                            print(f"[Learnable-TV/{loss}] epoch {epoch + 1}/{epochs} "
+                                  f"all {len(picks)} steps non-finite — epoch skipped")
+                        continue
+                    train_loss = running / counted
                     val_diag = val_diagnostic()
+                    phi_d = phi.detach()
                     curve.append({'epoch': epoch + 1, 'train_loss': train_loss,
-                                  'val_diagnostic': val_diag})
+                                  'val_diagnostic': val_diag,
+                                  # Did Phi actually move? Adam bounds travel by
+                                  # steps x lr, so compare phi_shift_l2 against the
+                                  # scale Phi must reach (init std for 'randn').
+                                  'phi_l2': phi_d.norm().item(),
+                                  'phi_absmean': phi_d.abs().mean().item(),
+                                  'phi_shift_l2': (phi_d - phi_init).norm().item()})
                     if verbose:
                         print(f"[Learnable-TV/{loss}] epoch {epoch + 1}/{epochs} "
-                              f"train_loss {train_loss:.4f} val_diag {val_diag:.4f}")
+                              f"train_loss {train_loss:.4f} val_diag {val_diag:.4f} "
+                              f"|Phi| {phi_d.norm().item():.4f} "
+                              f"|dPhi| {(phi_d - phi_init).norm().item():.4f}")
                     if best_train_loss is None or train_loss < best_train_loss:
                         best_train_loss = train_loss
                         best_phi = phi.detach().clone()
@@ -361,6 +398,12 @@ class LearnableTVWrapper(Qwen3Wrapper):
                 'selection': 'lowest_epoch_train_loss (paper rule)',
                 'best_train_loss': best_train_loss, 'curve': curve,
                 'num_train': len(train_idx), 'num_val_diagnostic': len(val_idx),
+                'phi_numel': int(phi.numel()),
+                # Adam moves each entry by at most ~lr per step, so this bounds how
+                # far Phi can travel from its init. Compare against the scale Phi
+                # needs (1.0 under 'randn'); if it is far smaller, the budget —
+                # not the step count — is what is limiting the baseline.
+                'max_travel_per_entry': epochs * samples_per_epoch * lr,
                 'k_shot_shuffled': k_shot if loss == 'ce' else None}
         return self.phi, info
 

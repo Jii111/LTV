@@ -16,13 +16,19 @@ config['run_ltv'] = True
 # injected at the input of one decoder layer at the label position.
 config['run_learned_tv'] = True
 config['learned_tv'] = {
-    'losses': ['ce', 'lmse'],  # 'ce'  : paper-faithful gold-label cross-entropy (their actual method)
-                               # 'lmse': label-free variant on our eq.-11 proxy vs ICL hiddens (our addition)
+    # Yang et al. is NOT an ICL method (they train on zero-shot prompts with gold
+    # labels), so the row we report is the ICL-based 'lmse' variant: their
+    # architecture, our label-free eq.-11 objective against 30-shot ICL teacher
+    # hiddens. Add 'ce' to also reproduce their own gold-label objective.
+    'losses': ['lmse'],
     'layer': 'mid',            # their best configuration: middle decoder layer
     'lr': 1e-3,                # paper text (their released code uses 5e-3)
     'weight_decay': 0.01,
     'epochs': 10,
-    'samples_per_epoch': 100,
+    'samples_per_epoch': 100,  # 1000 batch-1 steps. Unlike Learnable-TV this budget is
+                               # NOT scale-limited: reachable travel is 1000 x 1e-3 = 1.0
+                               # against an init of U(-0.1,0.1) (mean |theta| 0.05), so
+                               # theta is genuinely learned rather than set by its init.
     'patience': 2,
     'val_ratio': 0.2,          # 80/20 train/val split of the anchor pool
     'num_train_queries': 256,  # same anchor budget as LTV ('ce' additionally consumes gold labels)
@@ -34,15 +40,33 @@ config['learned_tv'] = {
 # added to every decoder layer's output at the label position.
 config['run_learnable_tv'] = True
 config['learnable_tv'] = {
-    'losses': ['ce', 'lmse'],  # 'ce'  : paper-faithful, CE on label-shuffled k-shot ICL prompts
-                               # 'lmse': label-free variant on our eq.-11 proxy (our addition)
+    # Saglam et al. IS an ICL method (its basis comes from ICL activations), so we
+    # report their own objective: CE on label-shuffled 30-shot ICL prompts.
+    # Add 'lmse' to also run the label-free variant.
+    'losses': ['ce'],
     'k_shot': 30,              # shuffled CE prompts reuse our 30-shot demonstration
-    'lr': 5e-5,                # their Adam lr (no weight decay)
-    'weight_decay': 0.0,
-    'init': 'zero',            # zero-init Phi: neutral start (v=0). Repo uses randn but trains
-                               # 64x longer, which a matched budget cannot escape from.
-    'epochs': 12,
-    'samples_per_epoch': 200,  # ~2400 batch-1 steps; selection = lowest epoch train loss (paper rule)
+    'weight_decay': 0.0,       # their Adam has no weight decay
+    # Phi is only (n_layers x n_heads) = 32x32 = 1024 scalars, so their 2000 iters
+    # are NOT a capacity requirement. Adam bounds per-entry travel by ~lr/step, so
+    # their own budget moves Phi just 2000 x 5e-5 = 0.10 against a randn init of
+    # std 1 — i.e. the INIT sets Phi's scale and training only perturbs it ~2%
+    # (verified numerically). Two consequences:
+    #   1. raising the step count is nearly useless here (800->2400 takes the
+    #      reachable scale from 0.04 to 0.12, both << 1);
+    #   2. zero-init at their lr is a DEAD setting: |Phi| ~ 0.04, v ~ 0, and the
+    #      method degenerates to zero-shot (observed on sst2: L_mse_logit 254 vs
+    #      zero-shot ref 255).
+    # So we hold steps x lr at the scale Phi must reach instead of inflating steps.
+    'init': 'zero',            # neutral start (v=0) rather than a random draw...
+    'lr': 1e-3,                # ...paired with lr raised so 800 x 1e-3 = 0.8 ~ the
+                               # 0.81 mean magnitude their randn init hands the method
+                               # for free. Set init='randn', lr=5e-5 to reproduce the
+                               # paper's own combination instead.
+    'epochs': 8,
+    'samples_per_epoch': 100,  # 800 batch-1 steps; selection = lowest epoch train loss (paper rule).
+                               # 'ce' prompts are 30-shot (~600 tokens), i.e. ~20x longer than the
+                               # zero-shot prompts used elsewhere. `curve` logs phi_l2/phi_shift_l2
+                               # per epoch — check those before changing this.
     'val_ratio': 0.2,          # held-out slice used ONLY for the convergence diagnostic
     'num_train_queries': 256,  # same anchor budget as LTV; 'ce' also uses their gold labels
 }
