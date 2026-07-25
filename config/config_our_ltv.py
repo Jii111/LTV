@@ -22,13 +22,14 @@ config['learned_tv'] = {
     # hiddens. Add 'ce' to also reproduce their own gold-label objective.
     'losses': ['lmse'],
     'layer': 'mid',            # their best configuration: middle decoder layer
-    'lr': 1e-3,                # paper text (their released code uses 5e-3)
+    'lr': 5e-3,                # their released code (train_ltv.py AdamW(..., lr=5e-3));
+                               # we follow the code rather than the paper text's 1e-3.
     'weight_decay': 0.01,
     'epochs': 8,
     'samples_per_epoch': 100,  # 800 batch-1 steps, same as Learnable-TV so every
                                # gradient baseline gets an identical update budget.
                                # Unlike Learnable-TV this budget is NOT scale-limited:
-                               # reachable travel is 800 x 1e-3 = 0.8 against an init of
+                               # reachable travel is 800 x 5e-3 = 4.0 against an init of
                                # U(-0.1,0.1) (mean |theta| 0.05), so theta is genuinely
                                # learned rather than set by its init.
     'patience': 2,
