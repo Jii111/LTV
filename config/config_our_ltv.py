@@ -19,7 +19,6 @@ config['seed'] = 42
 config['demo_seed'] = 12
 config['load_in_8bit'] = True
 config['use_cache'] = False
-config['save_logits'] = False
 
 # Data settings
 config['sample_method'] = 'uniform'  # 'random', 'uniform'
@@ -29,6 +28,7 @@ config['example_separator'] = '\n'
 # Evaluation settings
 config['test_data_num'] = 500
 config['compute_d_NTP'] = True
+config['compute_L_mse'] = True  # L_MSE (eq. 11): E||h_icl - h_tv||^2 at final-layer label position
 config['metric'] = 'acc'  # 'acc', 'macro_f1'
  
 # LTV extraction

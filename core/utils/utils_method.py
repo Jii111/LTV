@@ -94,10 +94,11 @@ def extract_label_position_hidden(
     """
     batch_size = hidden_states.size(0)
 
-    # Find last non-padding position for each sample
-    # attention_mask.sum(dim=1) gives total length
-    # Subtract 1 to get 0-indexed position
-    label_positions = attention_mask.sum(dim=1) - 1
+    # Find the index of the last non-padding token for each sample.
+    # Robust to both left- and right-padding (the tokenizer in this repo
+    # uses left padding, where `sum - 1` would point at the wrong token).
+    reversed_mask = torch.flip(attention_mask, dims=[1])
+    label_positions = attention_mask.size(1) - 1 - reversed_mask.argmax(dim=1)
 
     # Extract hidden states at these positions
     label_hiddens = hidden_states[torch.arange(batch_size), label_positions]
