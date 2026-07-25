@@ -67,43 +67,46 @@ config['learned_tv']   = {'losses': ['lmse'], 'epochs': 8, 'samples_per_epoch': 
 config['learnable_tv'] = {'losses': ['ce'],   'epochs': 8, 'samples_per_epoch': 100, ...}
 ```
 
-**One variant per baseline is reported** (see PART 2 for why):
+**Which variants are reported** (see PART 2 for why):
 
-| baseline | variant run | reason |
+| baseline | variants run | reason |
 |---|---|---|
-| Learned-TV (Yang) | **`lmse`** | their method is not ICL-based at all, so the ICL-based variant is the comparable row |
-| Learnable-TV (Saglam) | **`ce`** | their method *is* ICL-based, so their own gold-label objective is the faithful row |
+| Learned-TV (Yang) | **`lmse`** only | their method is not ICL-based at all (they train on zero-shot prompts with gold labels), so the ICL-based variant is the only comparable row |
+| Learnable-TV (Saglam) | **`ce` + `lmse`** | their method *is* ICL-based, so `ce` is the faithful row; `lmse` is added so both baselines can also be compared on the *same* objective as ours |
 
-Both objectives stay implemented — add `'ce'` / `'lmse'` to the respective
-`losses` list to run the other one too (roughly doubles that baseline's cost).
+That gives three trained rows per cell. Both objectives stay implemented for
+both baselines — edit the `losses` lists to change the mix.
 
-Training budget is `epochs × samples_per_epoch` batch-1 steps: **1000 for
-Learned-TV**, **800 for Learnable-TV**. Read the per-epoch `curve` in the result
-JSON before changing either — and for Learnable-TV read 2.6 first, because for
-that method the step count is *not* the knob that matters.
+Training budget is **800 batch-1 steps** (`epochs 8 × samples_per_epoch 100`)
+for every gradient baseline, so the update budget is identical across them.
+Read the per-epoch `curve` in the result JSON before changing it — and for
+Learnable-TV read 2.6 first, because for that method the step count is *not*
+the knob that matters.
 
 ## 1.4 Runtime (single GPU)
 
 Measured on one A100-40GB MIG slice, Llama-3.1-8B in 8-bit, 500 test samples,
 256 anchors, 30-shot demos, 800 training steps per baseline:
 
-| component | measured | note |
+| component | s/step | per (dataset, run) |
 |---|---|---|
-| LTV (ours) | **16 s** | closed form — effectively free |
-| Learned-TV `lmse` | **7.1 min** | 0.53 s/step; zero-shot prompts (~30 tokens) |
-| Learnable-TV `lmse` | 9.7 min | 0.73 s/step; zero-shot prompts |
-| Learnable-TV **`ce`** | *not yet measured* | prompts are 30-shot (**~600 tokens, ~20× longer**), so expect meaningfully more than the `lmse` figure |
-| evaluation (5 passes × 500) + basis / ICL-target collection | ~7.4 min | |
+| LTV (ours) | closed form | **0.3 min** |
+| Learned-TV `lmse` | 0.53 | **7.1 min** |
+| Learnable-TV `lmse` | 0.71 | **9.5 min** |
+| Learnable-TV `ce` | 0.91 | **12.1 min** |
+| evaluation (6 passes × 500) + basis / ICL-target collection | — | ~9.6 min |
+| | | **≈ 38.6 min / cell** |
 
-With the shipped configuration (Yang `lmse` + Saglam `ce`) the per-(dataset,run)
-cost is therefore **~7 min + [Saglam ce] + ~8 min**. Until `ce` is measured, plan
-for roughly **35–50 min per cell → 23–33 h for the full 8 datasets × 5 runs** on
-a single GPU, and refine the estimate from the first dataset's `[ETA]` lines,
-which report the real per-cell time as soon as one cell completes.
+`ce` costs only 1.27× `lmse` per step even though its prompts are 30-shot
+(~600 tokens vs ~30): the backward pass through 32 layers of injection
+dominates, not the prompt length.
 
-Cheaper options if that is too long: drop `run_num` to 3, or run a subset of
-`datasets` first — every dataset writes its own `result_dict.json`, so the sweep
-can be resumed dataset by dataset.
+**Full sweep: 8 datasets × 5 runs = 40 cells ≈ 25.7 h** on a single GPU.
+
+Cheaper options: `run_num = 3` → **15.4 h**; sst2+sst5 only at 5 runs →
+**6.4 h**. Every dataset writes its own `result_dict.json`, so the sweep can be
+stopped and resumed dataset by dataset. The `[ETA]` lines report the real
+per-cell time as soon as one cell completes — trust those over this table.
 
 ## 1.5 Progress / ETA logging
 

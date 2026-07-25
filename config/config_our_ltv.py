@@ -24,11 +24,13 @@ config['learned_tv'] = {
     'layer': 'mid',            # their best configuration: middle decoder layer
     'lr': 1e-3,                # paper text (their released code uses 5e-3)
     'weight_decay': 0.01,
-    'epochs': 10,
-    'samples_per_epoch': 100,  # 1000 batch-1 steps. Unlike Learnable-TV this budget is
-                               # NOT scale-limited: reachable travel is 1000 x 1e-3 = 1.0
-                               # against an init of U(-0.1,0.1) (mean |theta| 0.05), so
-                               # theta is genuinely learned rather than set by its init.
+    'epochs': 8,
+    'samples_per_epoch': 100,  # 800 batch-1 steps, same as Learnable-TV so every
+                               # gradient baseline gets an identical update budget.
+                               # Unlike Learnable-TV this budget is NOT scale-limited:
+                               # reachable travel is 800 x 1e-3 = 0.8 against an init of
+                               # U(-0.1,0.1) (mean |theta| 0.05), so theta is genuinely
+                               # learned rather than set by its init.
     'patience': 2,
     'val_ratio': 0.2,          # 80/20 train/val split of the anchor pool
     'num_train_queries': 256,  # same anchor budget as LTV ('ce' additionally consumes gold labels)
@@ -43,7 +45,10 @@ config['learnable_tv'] = {
     # Saglam et al. IS an ICL method (its basis comes from ICL activations), so we
     # report their own objective: CE on label-shuffled 30-shot ICL prompts.
     # Add 'lmse' to also run the label-free variant.
-    'losses': ['ce'],
+    # BOTH objectives are reported for Saglam: 'ce' is their own (the faithful row),
+    # 'lmse' is the label-free variant run under our eq.-11 objective, which makes
+    # the two baselines comparable on the same objective as well.
+    'losses': ['ce', 'lmse'],
     'k_shot': 30,              # shuffled CE prompts reuse our 30-shot demonstration
     'weight_decay': 0.0,       # their Adam has no weight decay
     # Phi is only (n_layers x n_heads) = 32x32 = 1024 scalars, so their 2000 iters
@@ -73,7 +78,7 @@ config['learnable_tv'] = {
 
 # Experiment settings
 config['return_logits'] = True
-config['run_num'] = 1
+config['run_num'] = 5          # 5 seeds -> the mean +- std reported in the table
 config['seed'] = 42
 config['demo_seed'] = 12
 config['load_in_8bit'] = True
