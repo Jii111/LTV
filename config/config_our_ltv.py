@@ -1,7 +1,7 @@
 config = {}
 
 ### Main Configuration ###
-config['exp_name'] = 'results/ltv'  
+config['exp_name'] = 'results/loreft'  # feat/loreft-baseline sweep (init_exp_path refuses to reuse an existing dir)
 config['gpus'] = ['0']
 config['models'] = ['meta-llama/Llama-3.1-8B'] # 'meta-llama/Llama-2-7b-hf', 'meta-llama/Llama-2-13b-hf', 'Qwen/Qwen3-8B', 'Qwen/Qwen2.5-7B'
 config['datasets'] = ['sst2','sst5','mr','subj','trec','hate_speech18','agnews','dbpedia'] 
@@ -14,7 +14,9 @@ config['run_ltv'] = True
 
 # Learned-TV baseline (Yang et al., ICLR 2026): gradient-trained single vector,
 # injected at the input of one decoder layer at the label position.
-config['run_learned_tv'] = True
+# Off on feat/loreft-baseline: the Yang/Saglam sweep belongs to PR #4 and
+# rerunning it here would double the cost. Flip on to run everything at once.
+config['run_learned_tv'] = False
 config['learned_tv'] = {
     # Yang et al. is NOT an ICL method (they train on zero-shot prompts with gold
     # labels), so the row we report is the ICL-based 'lmse' variant: their
@@ -41,7 +43,8 @@ config['learned_tv'] = {
 # Learnable-TV baseline (Saglam et al., ACL Findings 2025): a learnable
 # (n_layers x n_heads) mixing matrix over per-layer ICL-activation bases,
 # added to every decoder layer's output at the label position.
-config['run_learnable_tv'] = True
+# Off on feat/loreft-baseline — see run_learned_tv note above.
+config['run_learnable_tv'] = False
 config['learnable_tv'] = {
     # Saglam et al. IS an ICL method (its basis comes from ICL activations), so we
     # report their own objective: CE on label-shuffled 30-shot ICL prompts.
@@ -75,6 +78,42 @@ config['learnable_tv'] = {
                                # per epoch — check those before changing this.
     'val_ratio': 0.2,          # held-out slice used ONLY for the convergence diagnostic
     'num_train_queries': 256,  # same anchor budget as LTV; 'ce' also uses their gold labels
+}
+
+# LoReFT-style baseline (Wu et al., NeurIPS 2024, pyreft): explicitly
+# optimized low-rank representation intervention, requested by reviewer EHiD
+# to isolate the contribution of LTV's linear, closed-form (optimization-free)
+# formulation. Phi(h) = h + R^T((Wh+b) - Rh) at the label position, input of
+# the chosen decoder layer(s). Harness identical to Learned-TV, so the two
+# rows differ ONLY in the operator (query-dependent low-rank edit vs constant
+# vector), and both differ from LTV only in HOW the mapping is obtained
+# (gradient descent vs closed-form ridge).
+config['run_loreft'] = True
+config['loreft'] = {
+    # 'ce'   = LoReFT-faithful supervised objective (gold first-token CE on
+    #          zero-shot prompts; consumes anchor gold labels).
+    # 'lmse' = label-free eq.-11 proxy against ICL teacher hiddens — the same
+    #          information budget as our LTV, gradient-trained.
+    'losses': ['ce', 'lmse'],
+    'layers': 'mid',           # same injection site as Learned-TV; the original
+                               # intervenes at several layers ('all' or a list
+                               # of ints reproduces that at k x the cost)
+    'rank': 4,                 # pyreft's common low-rank dimension; params =
+                               # 2 x 4096 x 4 + 4 = 32,772 per site (vs Yang's
+                               # 4,096 and Saglam's 1,024)
+    'lr': 9e-4,                # the ReFT paper's standard LM learning rate.
+                               # Not scale-limited: 800 x 9e-4 = 0.72 travel vs
+                               # init entry scales ~1/sqrt(4096) = 0.016
+    'weight_decay': 0.0,
+    'dropout': 0.0,            # their tasks use 0.0-0.05; 0 keeps the learned
+                               # intervention deterministic at eval
+    'warmup_ratio': 0.1,       # linear warmup then linear decay (their setup)
+    'epochs': 8,
+    'samples_per_epoch': 100,  # 800 batch-1 steps — identical update budget to
+                               # Learned-TV and Learnable-TV
+    'patience': 2,
+    'val_ratio': 0.2,
+    'num_train_queries': 256,  # same anchor budget as LTV ('ce' additionally consumes gold labels)
 }
 
 # Experiment settings
