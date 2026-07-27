@@ -90,30 +90,33 @@ config['learnable_tv'] = {
 # (gradient descent vs closed-form ridge).
 config['run_loreft'] = True
 config['loreft'] = {
-    # 'ce'   = LoReFT-faithful supervised objective (gold first-token CE on
-    #          zero-shot prompts; consumes anchor gold labels).
-    # 'lmse' = label-free eq.-11 proxy against ICL teacher hiddens — the same
-    #          information budget as our LTV, gradient-trained.
-    'losses': ['ce', 'lmse'],
-    'layers': 'mid',           # same injection site as Learned-TV; the original
-                               # intervenes at several layers ('all' or a list
-                               # of ints reproduces that at k x the cost)
-    'rank': 4,                 # pyreft's common low-rank dimension; params =
-                               # 2 x 4096 x 4 + 4 = 32,772 per site (vs Yang's
-                               # 4,096 and Saglam's 1,024)
+    # Reported row: 'lmse' — LoReFT is not an ICL method (supervised FT), so
+    # like Learned-TV the comparable row is the label-free eq.-11 proxy
+    # against ICL teacher hiddens: the same information budget as our LTV,
+    # but explicitly gradient-optimized (the axis reviewer EHiD asks about).
+    # 'ce' (gold first-token CE on zero-shot prompts, + the 30 demo labels
+    # via extra_queries) stays implemented — add it here to run it.
+    'losses': ['lmse'],
+    'layers': 'all',           # original recipe: intervene at EVERY decoder
+                               # layer, trained jointly in one run ('mid'
+                               # isolates the operator at the Learned-TV site)
+    'rank': 8,                 # their commonsense-recipe rank; params =
+                               # 32 x (2 x 4096 x 8 + 8) ~ 2.1M — the original
+                               # parameterization (vs Yang 4,096 / Saglam 1,024)
     'lr': 9e-4,                # the ReFT paper's standard LM learning rate.
-                               # Not scale-limited: 800 x 9e-4 = 0.72 travel vs
-                               # init entry scales ~1/sqrt(4096) = 0.016
+                               # Not scale-limited: 800 x 9e-4 = 0.72 peak travel
+                               # (0.36 under the warmup+decay schedule) vs init
+                               # entry scales ~1/sqrt(4096) = 0.016
     'weight_decay': 0.0,
-    'dropout': 0.0,            # their tasks use 0.0-0.05; 0 keeps the learned
-                               # intervention deterministic at eval
+    'dropout': 0.05,           # their recipe (train-time only; injection uses
+                               # .eval(), so evaluation stays deterministic)
     'warmup_ratio': 0.1,       # linear warmup then linear decay (their setup)
     'epochs': 8,
     'samples_per_epoch': 100,  # 800 batch-1 steps — identical update budget to
                                # Learned-TV and Learnable-TV
     'patience': 2,
     'val_ratio': 0.2,
-    'num_train_queries': 256,  # same anchor budget as LTV ('ce' additionally consumes gold labels)
+    'num_train_queries': 256,  # same anchor budget as LTV
 }
 
 # Experiment settings

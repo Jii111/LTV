@@ -514,7 +514,7 @@ def main(args):
             lo_labels = [train_dataset.apply_template(train_dataset.all_data[i])[2]
                          for i in lo_indices]
             options = train_dataset.get_dmonstration_template()['options']
-            losses = lo_cfg.get('losses', ['ce', 'lmse'])
+            losses = lo_cfg.get('losses', ['lmse'])
 
             lo_icl_targets = None
             if 'lmse' in losses:
@@ -522,22 +522,32 @@ def main(args):
                     baseline_demon, lo_queries, tokenizer,
                     batch_size=extraction_batch_size,
                 )
+            # The 30 demonstration examples are labeled data every method
+            # already holds; the 'ce' objective trains on them too (train
+            # split only — see train_loreft).
+            lo_extra_queries = lo_extra_labels = None
+            if 'ce' in losses and demon_indices is not None:
+                lo_extra = [train_dataset.apply_template(train_dataset.all_data[i])
+                            for i in demon_indices]
+                lo_extra_queries = [t[0] for t in lo_extra]
+                lo_extra_labels = [t[2] for t in lo_extra]
 
             lo_entry = {}
             for loss_name in losses:
                 print(f"LoReFT ({loss_name}): training "
-                      f"(layers={lo_cfg.get('layers', 'mid')}, rank={lo_cfg.get('rank', 4)}, "
+                      f"(layers={lo_cfg.get('layers', 'all')}, rank={lo_cfg.get('rank', 8)}, "
                       f"lr={lo_cfg.get('lr', 9e-4)})...")
                 lo_start = time.time()
                 lo_interv, train_info = lo_wrapper.train_loreft(
                     queries=lo_queries, labels=lo_labels, tokenizer=tokenizer,
                     model_name=args.model_name, options=options,
                     loss=loss_name, icl_targets=lo_icl_targets,
-                    layers=lo_cfg.get('layers', 'mid'),
-                    rank=lo_cfg.get('rank', 4),
+                    extra_queries=lo_extra_queries, extra_labels=lo_extra_labels,
+                    layers=lo_cfg.get('layers', 'all'),
+                    rank=lo_cfg.get('rank', 8),
                     lr=lo_cfg.get('lr', 9e-4),
                     weight_decay=lo_cfg.get('weight_decay', 0.0),
-                    dropout=lo_cfg.get('dropout', 0.0),
+                    dropout=lo_cfg.get('dropout', 0.05),
                     warmup_ratio=lo_cfg.get('warmup_ratio', 0.1),
                     epochs=lo_cfg.get('epochs', 8),
                     samples_per_epoch=lo_cfg.get('samples_per_epoch', 100),

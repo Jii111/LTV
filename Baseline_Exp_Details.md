@@ -70,7 +70,7 @@ config['run_loreft']        = True   # Wu et al. (feat/loreft-baseline only)
 
 config['learned_tv']   = {'losses': ['lmse'], 'epochs': 8, 'samples_per_epoch': 100, ...}
 config['learnable_tv'] = {'losses': ['ce'],   'epochs': 8, 'samples_per_epoch': 100, ...}
-config['loreft']       = {'losses': ['ce','lmse'], 'rank': 4, 'epochs': 8, 'samples_per_epoch': 100, ...}
+config['loreft']       = {'losses': ['lmse'], 'layers': 'all', 'rank': 8, 'epochs': 8, 'samples_per_epoch': 100, ...}
 ```
 
 On `feat/loreft-baseline`, `run_learned_tv` / `run_learnable_tv` default to
@@ -83,7 +83,7 @@ cost. Flip them back on to run everything in one pass.
 |---|---|---|
 | Learned-TV (Yang) | **`lmse`** only | their method is not ICL-based at all (they train on zero-shot prompts with gold labels), so the ICL-based variant is the only comparable row |
 | Learnable-TV (Saglam) | **`ce` + `lmse`** | their method *is* ICL-based, so `ce` is the faithful row; `lmse` is added so both baselines can also be compared on the *same* objective as ours |
-| LoReFT (Wu) | **`ce` + `lmse`** | reviewer EHiD asked for an *explicitly optimized* intervention; `ce` is the LoReFT-faithful supervised row (gold first-token CE), `lmse` puts it on the same label-free objective and information budget as our LTV |
+| LoReFT (Wu) | **`lmse`** only | like Learned-TV it is not an ICL method (supervised FT on labeled sets), so the comparable row is the label-free `lmse`: the *same information budget as our LTV*, but explicitly gradient-optimized — exactly the axis reviewer EHiD wants isolated. `ce` (gold first-token CE, also consuming the 30 demo labels) stays implemented; add it to `losses` to run it |
 
 Both objectives stay implemented for every baseline — edit the `losses` lists
 to change the mix.
@@ -105,8 +105,7 @@ Measured on one A100-40GB MIG slice, Llama-3.1-8B in 8-bit, 500 test samples,
 | Learned-TV `lmse` | 0.53 | **7.1 min** |
 | Learnable-TV `lmse` | 0.71 | **9.5 min** |
 | Learnable-TV `ce` | 0.91 | **12.1 min** |
-| LoReFT `lmse` *(estimate)* | ~0.55 | **~7.5 min** |
-| LoReFT `ce` *(estimate)* | ~0.5 | **~7 min** |
+| LoReFT `lmse`, all-layer *(estimate)* | ~0.7 | **~9.5 min** |
 | evaluation (6 passes × 500) + basis / ICL-target collection | — | ~9.6 min |
 | | | **≈ 38.6 min / cell** (PR #4 mix) |
 
@@ -114,14 +113,17 @@ Measured on one A100-40GB MIG slice, Llama-3.1-8B in 8-bit, 500 test samples,
 (~600 tokens vs ~30): the backward pass through 32 layers of injection
 dominates, not the prompt length.
 
-LoReFT rows are estimates, not measurements: same zero-shot prompts, same
-step budget and single-layer injection as Learned-TV, plus a negligible
-(d×r) matmul — so per-step cost should land at Learned-TV `lmse` ± a few
-percent. The first `[ETA]` line of a real run replaces these numbers.
+The LoReFT row is an estimate, not a measurement: same zero-shot prompts
+and step budget as Learned-TV `lmse` (0.53 s/step, mid-layer), but the
+backward pass now runs through interventions at all 32 layers — Saglam's
+all-layer injection costs 0.71 s/step on this box, so ~0.7 is the anchor.
+The first `[ETA]` line of a real run replaces this number.
 
 **Full sweep (PR #4 mix): 8 datasets × 5 runs = 40 cells ≈ 25.7 h** on a
-single GPU. **LoReFT-branch mix** (zero/few/LTV + LoReFT `ce`+`lmse`, Yang
-and Saglam off): ~24 min/cell → **≈ 16 h**; `run_num = 3` → **≈ 9.6 h**.
+single GPU. **LoReFT-branch mix** (zero/few/LTV + LoReFT `lmse`, Yang and
+Saglam off): ≈ 9.5 min train + ~0.7 min ICL-target collection + ~5 min
+evals + 0.3 min LTV ≈ **~16 min/cell → ≈ 10.5 h**; `run_num = 3` →
+**≈ 6.5 h**. Smoke config: **~10 min** including model load.
 
 Cheaper options: `run_num = 3` → **15.4 h**; sst2+sst5 only at 5 runs →
 **6.4 h**. Every dataset writes its own `result_dict.json`, so the sweep can be
@@ -388,14 +390,18 @@ Three properties make it the right ablation partner:
 |---|---|---|---|
 | edit | constant vector θ | query-dependent low-rank edit Φ(h) | query-dependent linear f = W·h_zs |
 | obtained by | gradient descent | gradient descent | **closed form (ridge)** |
-| params | 4,096 | 32,772 (rank 4) | d² (closed-form, not "trained") |
+| params | 4,096 | ~2.1M (rank 8 × all 32 layers, original recipe) | d² (closed-form, not "trained") |
 
-The **harness is byte-for-byte the Learned-TV harness** — same 256 anchors,
-same 800 batch-1 steps, same injection site (input of the middle decoder
-layer, label position only), same `ce`/`lmse` objectives, same val-based
-patience selection. The Learned-TV and LoReFT rows therefore differ **only in
-the operator**, and both differ from LTV **only in how the mapping is
-obtained**. That is exactly the axis the reviewer wants isolated.
+The **budget is byte-for-byte the Learned-TV budget** — same 256 anchors,
+same 800 batch-1 steps, same `lmse` objective against the same ICL teacher,
+same val-based patience selection — while the intervention itself follows
+the **original LoReFT recipe**: rank 8 at every decoder layer, trained
+jointly in one run, lr 9e-4, 10% warmup + linear decay, dropout 0.05. So
+the LoReFT row differs from LTV in exactly one thing: the mapping is
+explicitly gradient-optimized (and non-degenerate low-rank) rather than
+closed-form — the axis the reviewer wants isolated. `layers: 'mid'` remains
+available to additionally pin LoReFT to the Learned-TV injection site for a
+pure operator-vs-operator comparison.
 
 Deviations from the original LoReFT recipe (all in `wrapper_loreft.py`'s
 docstring too):
@@ -403,9 +409,8 @@ docstring too):
 | deviation | why |
 |---|---|
 | single position (label token) instead of prefix+suffix position sets | every method in this suite intervenes at the label position only; multi-position would change the harness, not the operator |
-| single `mid` layer by default (original: several layers) | matches the Learned-TV site so the operator comparison is clean; `layers: 'all'` or a list of ints reproduces the multi-layer setup at k× cost |
-| `ce`/`lmse` objectives instead of seq2seq LM loss over a completion | classification-first-token CE *is* the LM loss restricted to our setting; `lmse` is the same-budget row |
-| dropout 0 (original tasks: 0.0–0.05) | keeps the learned intervention deterministic at eval; config knob exists |
+| `lmse` objective instead of their seq2seq LM loss over a completion | LoReFT is supervised FT, not an ICL method — the comparable row is the label-free eq.-11 proxy under the same information budget as LTV (the Learned-TV precedent). `ce` (gold first-token CE = their LM loss restricted to classification, additionally consuming the 30 demo labels via `extra_queries`) stays implemented; add it to `losses` to run it |
+| 800-step budget instead of multi-epoch passes over 10⁵-example labeled sets | the suite's equal-budget rule; not scale-limited (see below), so it is a genuine optimization budget |
 
 Training-dynamics sanity (the 2.6 lesson, re-checked): 800 × lr 9e-4 gives
 per-entry travel 0.72 against init entry scales of ~1/√4096 ≈ 0.016 for both
@@ -453,6 +458,7 @@ block-scaled — not the regression code's per-head projection + sum.)
 exactly orthonormal by torch's orthogonal parametrization) and a learned
 affine source `Wh + b`, applied to the residual stream with the LLM frozen.
 Operator taken verbatim from pyreft's `LoreftIntervention` (linear activation,
-default inits); AdamW (lr 9e-4, linear warmup 10% then linear decay), rank 4,
-input of the middle decoder layer at the label position. Requested by
-reviewer EHiD as the explicitly-optimized comparison — see 2.7.
+default inits); AdamW (lr 9e-4, linear warmup 10% then linear decay, dropout
+0.05), rank 8 at every decoder layer (trained jointly, ~2.1M params), label
+position. Requested by reviewer EHiD as the explicitly-optimized
+comparison — see 2.7.
