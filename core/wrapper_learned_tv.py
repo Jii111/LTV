@@ -133,6 +133,18 @@ class LearnedTVWrapper(Qwen3Wrapper):
         theta = ((torch.rand(self.embed_dim, generator=gen) * 2 - 1) * init_scale)
         theta = theta.to(device=device, dtype=torch.float32).requires_grad_(True)
         optimizer = torch.optim.AdamW([theta], lr=lr, weight_decay=weight_decay)
+        # Their trainer steps a linear-decay schedule once per sample, but sizes it
+        # with num_training_steps = num_epochs * len(train_set) while only sampling
+        # `samples_per_epoch` items per epoch (train_ltv.py: get_scheduler(...,
+        # num_training_steps=num_epochs * len(train_set)) vs
+        # train_set.select(random.sample(..., 100))). So the LR decays only
+        # partially -- 5e-3 -> ~4.2e-3 over their 1000 actual steps. We reproduce
+        # that denominator rather than decaying to 0 over the steps we really take,
+        # which would halve the average LR and handicap the baseline.
+        sched_steps = max(1, epochs * max(len(train_idx), 1))
+        actual_steps = max(1, epochs * min(samples_per_epoch, max(len(train_idx), 1)))
+        scheduler = torch.optim.lr_scheduler.LambdaLR(
+            optimizer, lambda s: max(0.0, 1.0 - s / sched_steps))
 
         def pre_hook(mod, args, kwargs):
             hidden = args[0] if args else kwargs['hidden_states']
@@ -179,6 +191,7 @@ class LearnedTVWrapper(Qwen3Wrapper):
             return correct / len(val_idx)
 
         best_score, best_theta, no_improve, epochs_ran = None, None, 0, 0
+        curve = []
         try:
             with torch.enable_grad():
                 for epoch in range(epochs):
@@ -197,14 +210,22 @@ class LearnedTVWrapper(Qwen3Wrapper):
                             assert theta.grad is not None and theta.grad.abs().sum().item() > 0, \
                                 "no gradient reached theta — injection hook not in the graph"
                         optimizer.step()
+                        scheduler.step()
                         running += loss_t.item()
                         pbar.set_postfix(loss=f"{running / (step + 1):.3f}")
                         if (step + 1) % 32 == 0:
                             torch.cuda.empty_cache()
+                    train_loss = running / len(picks)
                     score = val_score()
+                    curve.append({'epoch': epoch + 1, 'train_loss': train_loss,
+                                  'val_score': score,
+                                  # records the per-sample linear decay so the
+                                  # schedule is verifiable from the result JSON
+                                  'lr': scheduler.get_last_lr()[0],
+                                  'theta_l2': theta.detach().norm().item()})
                     if verbose:
                         print(f"[Learned-TV/{loss}] epoch {epoch + 1}/{epochs} "
-                              f"train_loss {running / len(picks):.4f} val_score {score:.4f}")
+                              f"train_loss {train_loss:.4f} val_score {score:.4f}")
                     if best_score is None or score > best_score:
                         best_score, no_improve = score, 0
                         best_theta = theta.detach().clone()
@@ -221,8 +242,15 @@ class LearnedTVWrapper(Qwen3Wrapper):
         self.theta = best_theta.cpu()
         self.layer_idx = layer_idx
         info = {'layer_idx': layer_idx, 'loss': loss, 'lr': lr,
-                'epochs_ran': epochs_ran, 'best_val_score': best_score,
-                'num_train': len(train_idx), 'num_val': len(val_idx)}
+                'selection': 'best val accuracy, patience early stop (paper rule)',
+                'epochs_ran': epochs_ran, 'best_val_score': best_score, 'curve': curve,
+                'num_train': len(train_idx), 'num_val': len(val_idx),
+                'theta_numel': int(theta.numel()), 'total_steps': actual_steps,
+                'scheduler_steps': sched_steps,
+                'final_lr': scheduler.get_last_lr()[0],
+                # unlike Learnable-TV this budget is not scale-limited:
+                # reachable travel (steps x lr) vs the U(-init_scale, init_scale) start
+                'max_travel_per_entry': actual_steps * lr, 'init_scale': init_scale}
         return self.theta, info
 
     # ------------------------------------------------------------------

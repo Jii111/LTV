@@ -27,6 +27,7 @@ import core.utils.utils_method as um
 from core.wrapper_ltv import LTVWrapper
 from core.wrapper_learned_tv import LearnedTVWrapper
 from core.wrapper_learnable_tv import LearnableTVWrapper
+from core.wrapper_loreft import LoReFTWrapper
 
 task_queue = None
 
@@ -59,9 +60,10 @@ def print_eta(prefix: str, done: int, total: int, start_time: float) -> None:
 def init_result_dict() -> dict:
     result_dict = {
         'test_result': {
-            'zero_shot': [], 'few_shot': [], 'ltv': [], 'learned_tv': [], 'learnable_tv': []
+            'zero_shot': [], 'few_shot': [], 'ltv': [], 'learned_tv': [], 'learnable_tv': [],
+            'loreft': []
         },
-        'time': {'ltv': [], 'learned_tv': [], 'learnable_tv': []}
+        'time': {'ltv': [], 'learned_tv': [], 'learnable_tv': [], 'loreft': []}
     }
     return result_dict
 
@@ -445,7 +447,6 @@ def main(args):
                     weight_decay=la_cfg.get('weight_decay', 0.0),
                     epochs=la_cfg.get('epochs', 10),
                     samples_per_epoch=la_cfg.get('samples_per_epoch', 100),
-                    patience=la_cfg.get('patience', 2),
                     val_ratio=la_cfg.get('val_ratio', 0.2),
                     init=la_cfg.get('init', 'zero'),
                     example_separator=cfg['example_separator'],
@@ -498,6 +499,109 @@ def main(args):
 
             result_dict['test_result']['learnable_tv'].append(la_entry)
             del la_wrapper
+            torch.cuda.empty_cache()
+
+        # ====== LoReFT-style baseline (Wu et al., NeurIPS 2024) ======
+        if cfg.get('run_loreft', False):
+            lo_cfg = cfg.get('loreft', {})
+            lo_wrapper = LoReFTWrapper(model, tokenizer, model_config, args.device)
+
+            exclude_demo = set(demon_indices) if demon_indices is not None else set()
+            lo_queries, lo_indices = utils.build_train_queries(
+                train_dataset, lo_cfg.get('num_train_queries', 256),
+                exclude_indices=exclude_demo,
+            )
+            lo_labels = [train_dataset.apply_template(train_dataset.all_data[i])[2]
+                         for i in lo_indices]
+            options = train_dataset.get_dmonstration_template()['options']
+            losses = lo_cfg.get('losses', ['lmse'])
+
+            lo_icl_targets = None
+            if 'lmse' in losses:
+                lo_icl_targets = lo_wrapper.collect_icl_hidden(
+                    baseline_demon, lo_queries, tokenizer,
+                    batch_size=extraction_batch_size,
+                )
+            # The 30 demonstration examples are labeled data every method
+            # already holds; the 'ce' objective trains on them too (train
+            # split only — see train_loreft).
+            lo_extra_queries = lo_extra_labels = None
+            if 'ce' in losses and demon_indices is not None:
+                lo_extra = [train_dataset.apply_template(train_dataset.all_data[i])
+                            for i in demon_indices]
+                lo_extra_queries = [t[0] for t in lo_extra]
+                lo_extra_labels = [t[2] for t in lo_extra]
+
+            lo_entry = {}
+            for loss_name in losses:
+                print(f"LoReFT ({loss_name}): training "
+                      f"(layers={lo_cfg.get('layers', 'all')}, rank={lo_cfg.get('rank', 8)}, "
+                      f"lr={lo_cfg.get('lr', 9e-4)})...")
+                lo_start = time.time()
+                lo_interv, train_info = lo_wrapper.train_loreft(
+                    queries=lo_queries, labels=lo_labels, tokenizer=tokenizer,
+                    model_name=args.model_name, options=options,
+                    loss=loss_name, icl_targets=lo_icl_targets,
+                    extra_queries=lo_extra_queries, extra_labels=lo_extra_labels,
+                    layers=lo_cfg.get('layers', 'all'),
+                    rank=lo_cfg.get('rank', 8),
+                    lr=lo_cfg.get('lr', 9e-4),
+                    weight_decay=lo_cfg.get('weight_decay', 0.0),
+                    dropout=lo_cfg.get('dropout', 0.05),
+                    warmup_ratio=lo_cfg.get('warmup_ratio', 0.1),
+                    epochs=lo_cfg.get('epochs', 8),
+                    samples_per_epoch=lo_cfg.get('samples_per_epoch', 100),
+                    patience=lo_cfg.get('patience', 2),
+                    val_ratio=lo_cfg.get('val_ratio', 0.2),
+                    seed=seed + run_id,
+                )
+                train_time = time.time() - lo_start
+
+                print(f"LoReFT ({loss_name}): evaluating...")
+                test_lo_hidden = None
+                with lo_wrapper.inject_loreft(lo_interv, train_info['layer_idxs']):
+                    lo_out = test_evaluator.evaluate(
+                        lo_wrapper, tokenizer, demonstration='',
+                        use_cache=use_cache,
+                        return_logits=return_logits,
+                        return_hidden=compute_L_mse,
+                        desc=f"Eval LoReFT ({loss_name})"
+                    )
+                if compute_L_mse:
+                    test_lo, test_lo_logits, test_lo_labels, test_lo_hidden = lo_out
+                else:
+                    test_lo, test_lo_logits, test_lo_labels = lo_out
+                lo_metrics = dict(test_lo) if isinstance(test_lo, dict) else {"result": test_lo}
+                lo_metrics.update({'loss': loss_name, 'train_time_sec': round(train_time, 3),
+                                   **{f'train_{k}': v for k, v in train_info.items()}})
+                result_dict['time']['loreft'].append(train_time)
+                print_result(f"Test LoReFT ({loss_name})", test_lo)
+
+                # Same alignment metrics as the LTV block, vs the same ICL reference.
+                if cfg.get('compute_d_NTP', False) and test_few_labels == test_lo_labels:
+                    lo_metrics["d_NTP"] = metric.compute_d_NTP(
+                        test_few_logits, test_lo_logits, is_qwen='Qwen' in args.model_name
+                    )
+                    lo_metrics.update(metric.compute_L_mse_logit(test_few_logits, test_lo_logits))
+                    if test_zero_logits is not None and test_zero_labels == test_few_labels:
+                        lo_metrics["d_NTP_zero_ref"] = metric.compute_d_NTP(
+                            test_few_logits, test_zero_logits, is_qwen='Qwen' in args.model_name
+                        )
+                        lo_metrics["L_mse_logit_zero_ref"] = metric.compute_L_mse_logit(
+                            test_few_logits, test_zero_logits)["L_mse_logit"]
+                if compute_L_mse and test_few_hidden is not None and test_lo_hidden is not None \
+                        and test_few_labels == test_lo_labels:
+                    lo_metrics.update(metric.compute_L_mse(test_few_hidden, test_lo_hidden))
+                    if test_zero_hidden is not None:
+                        lo_metrics["L_mse_zero_ref"] = metric.compute_L_mse(
+                            test_few_hidden, test_zero_hidden)["L_mse"]
+                    print_result(f"Test LoReFT ({loss_name}) L_mse",
+                                 {k: v for k, v in lo_metrics.items() if k.startswith("L_mse")})
+
+                lo_entry[loss_name] = lo_metrics
+
+            result_dict['test_result']['loreft'].append(lo_entry)
+            del lo_wrapper
             torch.cuda.empty_cache()
 
         print_eta(f"{args.dataset_name} runs", run_id + 1, run_num, suite_start)
