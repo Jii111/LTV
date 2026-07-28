@@ -8,73 +8,60 @@ config['datasets'] = ['sst2','sst5','mr','subj','trec','hate_speech18','agnews',
 config['num_shot'] = 30 # number of shots, which ensures label balance by including the maximum possible examples per label
 config['bs'] = 16  # batch size
 
-# Run LTV
-config['run_baseline'] = True
-config['run_ltv'] = True
+# Baseline-only sweep: both gradient baselines run with their own published
+# training recipes (objective, init, lr, schedule, step count, selection).
+# Zero-shot / ICL / LTV rows come from earlier sweeps, so they are OFF here;
+# flip run_baseline back on to also record d_NTP / L_mse against the
+# same-run ICL logits (without it only acc / macro-F1 are recorded).
+config['run_baseline'] = False
+config['run_ltv'] = False
 
 # Learned-TV baseline (Yang et al., ICLR 2026): gradient-trained single vector,
 # injected at the input of one decoder layer at the label position.
+# Their published recipe as-is:
 config['run_learned_tv'] = True
 config['learned_tv'] = {
-    # Yang et al. is NOT an ICL method (they train on zero-shot prompts with gold
-    # labels), so the row we report is the ICL-based 'lmse' variant: their
-    # architecture, our label-free eq.-11 objective against 30-shot ICL teacher
-    # hiddens. Add 'ce' to also reproduce their own gold-label objective.
-    'losses': ['lmse'],
+    'losses': ['ce'],          # their objective: gold-label first-token CE on zero-shot
+                               # prompts ('lmse', our eq.-11 variant, stays implemented)
     'layer': 'mid',            # their best configuration: middle decoder layer
     'lr': 5e-3,                # their released code (train_ltv.py AdamW(..., lr=5e-3));
                                # we follow the code rather than the paper text's 1e-3.
+                               # The per-sample linear-decay schedule (their formula,
+                               # denominator num_epochs x len(train_set)) is reproduced
+                               # inside the wrapper.
     'weight_decay': 0.01,
-    'epochs': 8,
-    'samples_per_epoch': 100,  # 800 batch-1 steps, same as Learnable-TV so every
-                               # gradient baseline gets an identical update budget.
-                               # Unlike Learnable-TV this budget is NOT scale-limited:
-                               # reachable travel is 800 x 5e-3 = 4.0 against an init of
-                               # U(-0.1,0.1) (mean |theta| 0.05), so theta is genuinely
-                               # learned rather than set by its init.
-    'patience': 2,
-    'val_ratio': 0.2,          # 80/20 train/val split of the anchor pool
-    'num_train_queries': 256,  # same anchor budget as LTV ('ce' additionally consumes gold labels)
-    'init_scale': 0.1,
+    'epochs': 10,              # their num_epochs
+    'samples_per_epoch': 100,  # their per-epoch sample count -> up to 1,000 batch-1 steps
+    'patience': 2,             # their early stopping on held-out accuracy
+    'val_ratio': 0.4,          # their 600/400 train/val split ratio, applied to the anchor pool
+    'num_train_queries': 256,  # anchor queries; 'ce' consumes their gold labels
+    'init_scale': 0.1,         # their U(-0.1, 0.1) init
 }
 
 # Learnable-TV baseline (Saglam et al., ACL Findings 2025): a learnable
 # (n_layers x n_heads) mixing matrix over per-layer ICL-activation bases,
 # added to every decoder layer's output at the label position.
+# Their published recipe as-is (batch 1 instead of their 32; their
+# 2000-iteration update count is preserved). Caveat kept on record: Adam
+# bounds per-entry travel by ~lr per step, so their own budget moves Phi only
+# 2000 x 5e-5 = 0.10 against a randn init of std 1 — Phi's scale comes from
+# the init, and training perturbs it ~10%. That is their method as published;
+# check `curve` (phi_l2 / phi_shift_l2) before interpreting the number.
 config['run_learnable_tv'] = True
 config['learnable_tv'] = {
-    # Saglam et al. IS an ICL method (its basis comes from ICL activations), so we
-    # report their own objective: CE on label-shuffled 30-shot ICL prompts.
-    # Add 'lmse' to also run the label-free variant.
-    # BOTH objectives are reported for Saglam: 'ce' is their own (the faithful row),
-    # 'lmse' is the label-free variant run under our eq.-11 objective, which makes
-    # the two baselines comparable on the same objective as well.
-    'losses': ['ce', 'lmse'],
-    'k_shot': 30,              # shuffled CE prompts reuse our 30-shot demonstration
+    'losses': ['ce'],          # their objective: gold-label CE on label-shuffled k-shot
+                               # prompts ('lmse', our eq.-11 variant, stays implemented)
+    'k_shot': 10,              # shots in the shuffled CE prompts (their README setting)
     'weight_decay': 0.0,       # their Adam has no weight decay
-    # Phi is only (n_layers x n_heads) = 32x32 = 1024 scalars, so their 2000 iters
-    # are NOT a capacity requirement. Adam bounds per-entry travel by ~lr/step, so
-    # their own budget moves Phi just 2000 x 5e-5 = 0.10 against a randn init of
-    # std 1 — i.e. the INIT sets Phi's scale and training only perturbs it ~2%
-    # (verified numerically). Two consequences:
-    #   1. raising the step count is nearly useless here (800->2400 takes the
-    #      reachable scale from 0.04 to 0.12, both << 1);
-    #   2. zero-init at their lr is a DEAD setting: |Phi| ~ 0.04, v ~ 0, and the
-    #      method degenerates to zero-shot (observed on sst2: L_mse_logit 254 vs
-    #      zero-shot ref 255).
-    # So we hold steps x lr at the scale Phi must reach instead of inflating steps.
-    'init': 'zero',            # neutral start (v=0) rather than a random draw...
-    'lr': 1e-3,                # ...paired with lr raised so 800 x 1e-3 = 0.8 ~ the
-                               # 0.81 mean magnitude their randn init hands the method
-                               # for free. Set init='randn', lr=5e-5 to reproduce the
-                               # paper's own combination instead.
-    'epochs': 8,
-    'samples_per_epoch': 100,  # 800 batch-1 steps; selection = lowest epoch train loss (paper rule).
-                               # 'ce' prompts are 30-shot (~600 tokens), i.e. ~20x longer than the
-                               # zero-shot prompts used elsewhere. `curve` logs phi_l2/phi_shift_l2
-                               # per epoch — check those before changing this.
-    'val_ratio': 0.2,          # held-out slice used ONLY for the convergence diagnostic
-    'num_train_queries': 256,  # same anchor budget as LTV; 'ce' also uses their gold labels
+    'init': 'randn',           # their Gaussian init (ltv.py:17)
+    'lr': 5e-5,                # their Adam lr
+    'epochs': 20,
+    'samples_per_epoch': 100,  # 20 x 100 = their 2000 iterations, batch 1.
+                               # Selection = lowest epoch-mean train loss, no early
+                               # stop (their effective rule; wrapper docstring).
+    'val_ratio': 0.0,          # their loop has no genuine held-out split (the wrapper
+                               # still carves 1 sample as a minimal convergence log)
+    'num_train_queries': 256,  # anchor queries: basis construction + 'ce' gold labels
 }
 
 # Experiment settings
