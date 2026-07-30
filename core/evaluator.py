@@ -3,6 +3,7 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from tqdm import tqdm
 from typing import Any, Dict, List, Optional, Tuple
 
 import global_vars as gv
@@ -30,14 +31,17 @@ class Evaluator(nn.Module):
         edit_layer: Optional[int] = None,
         model_config: Optional[Any] = None,
         return_q_states: bool = False,
+        return_hidden: bool = False,
+        desc: str = "Eval",
     ):
         """Evaluate a model wrapper on the dataset."""
         return self._evaluate_text_classification_batch(
             model_wrapper, tokenizer,
             demonstration, use_cache=use_cache, return_logits=return_logits,
             return_head_outputs=return_head_outputs, fv_vector=fv_vector, sv_logit=sv_logit, edit_layer=edit_layer, model_config=model_config,
-            return_q_states=return_q_states
-        )  
+            return_q_states=return_q_states, return_hidden=return_hidden,
+            desc=desc
+        )
         
     def _evaluate_text_classification_batch(
         self,
@@ -52,11 +56,14 @@ class Evaluator(nn.Module):
         model_config: Optional[Any] = None,
         return_head_outputs: bool = False,
         return_q_states: bool = False,
+        return_hidden: bool = False,
+        desc: str = "Eval",
     ):
         """Run batched evaluation and collect logits."""
 
         model = model_wrapper.model
         all_base_logits = []
+        all_label_hiddens = []
         all_inputs, all_labels = [], []
         for data in self.dataset.all_data:
             ques_str, _, label = self.dataset.apply_template(data)
@@ -66,7 +73,9 @@ class Evaluator(nn.Module):
 
         use_cache = False
 
-        for batch_idx, i in enumerate(range(0, len(all_inputs), self.batch_size)):
+        # tqdm gives per-batch it/s and ETA for every eval pass.
+        for batch_idx, i in enumerate(tqdm(range(0, len(all_inputs), self.batch_size),
+                                           desc=desc, leave=False)):
             cur_inputs = all_inputs[i:i + self.batch_size]
 
             input_tok = tokenizer(cur_inputs, return_tensors="pt", padding=True)
@@ -77,22 +86,42 @@ class Evaluator(nn.Module):
             gv.ATTN_MASK_START = torch.zeros_like(pred_loc)
             gv.ATTN_MASK_END = pred_loc
                       
-            output = model(input_ids=input_ids,attention_mask=attn_mask, 
-                use_cache=False,return_head_outputs=return_head_outputs,return_q_states=return_q_states)
+            extra_kwargs = {}
+            if return_head_outputs:
+                extra_kwargs['return_head_outputs'] = True
+            if return_q_states:
+                extra_kwargs['return_q_states'] = True
+            if return_hidden:
+                extra_kwargs['output_hidden_states'] = True
+            output = model(input_ids=input_ids, attention_mask=attn_mask,
+                use_cache=False, **extra_kwargs)
             logits = output.logits
 
             base_logits = logits[torch.arange(logits.size(0)), pred_loc]
             all_base_logits.append(base_logits.detach().cpu())
 
+            if return_hidden:
+                # Final-layer (post-norm) hidden at the label position: what the LM
+                # head consumes, i.e. h_icl / h_zs / h_tv depending on inference mode.
+                last_hidden = output.hidden_states[-1]
+                label_hidden = last_hidden[torch.arange(last_hidden.size(0)), pred_loc]
+                all_label_hiddens.append(label_hidden.detach().float().cpu())
+
             del logits
             torch.cuda.empty_cache()
-        
+
+        label_hiddens = torch.cat(all_label_hiddens, dim=0) if return_hidden else None
+
         if return_logits:
             metrics, all_pred_logits = self.evaluate_logits(
                 all_base_logits, all_labels, tokenizer, model_wrapper.model.config._name_or_path, return_logits=return_logits)
+            if return_hidden:
+                return metrics, all_pred_logits, all_labels, label_hiddens
             return metrics, all_pred_logits, all_labels
         else:
             metrics = self.evaluate_logits(all_base_logits, all_labels, tokenizer, model_wrapper.model.config._name_or_path, return_logits=return_logits)
+            if return_hidden:
+                return metrics, label_hiddens
             return metrics
         
     def evaluate_logits(
