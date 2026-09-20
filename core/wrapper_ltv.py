@@ -11,7 +11,11 @@ M2-Adaptive (linear Δ):
 - Closed-form ridge: W = (H0^T H0 + λI)^-1 H0^T Y (implemented in utils_method).
 - Inference: h_TV = h_zero(label) + W @ h_zero(label).
 
-Hooking: we inject at the last decoder layer output (label position only) via forward hooks.
+Hooking: we inject at the model's final norm output (self.last_norm, label
+position only) via forward hooks -- the same post-norm space Δ/W are
+extracted from (hidden_states[-1]). Hooking the raw last decoder layer
+instead would mix pre-norm and post-norm vector spaces (RMSNorm's per-token
+scale is not a fixed ratio).
 """
 
 from contextlib import contextmanager
@@ -90,7 +94,11 @@ class M2Wrapper(Qwen3Wrapper):
     def inject_m2_task_vector(self, task_vector: Optional[torch.Tensor] = None) -> Iterator[None]:
         """Context manager to inject a constant task vector."""
         """
-        Add constant Δ to label hidden at the last decoder layer.
+        Add constant Δ to label hidden at the model's final norm output
+        (self.last_norm) -- the same post-norm space extract_m2_task_vector
+        computes Δ on (hidden_states[-1] is post-norm). Hooking the raw
+        decoder layer instead would add Δ to a different, pre-norm vector
+        space than it was computed on.
         Assumes gv.ATTN_MASK_END is set before forward (Evaluator sets this).
         """
         if task_vector is None:
@@ -99,8 +107,6 @@ class M2Wrapper(Qwen3Wrapper):
             raise ValueError("No task vector available. Run extract_m2_task_vector first.")
 
         delta = task_vector.to(self.device)
-        layer_idx = self.num_layers - 1
-        layer_module = self._get_nested_attr(self._get_arribute_path(layer_idx, "hidden"))
         handles = []
 
         def hook(module: Any, inputs: Any, outputs: Any) -> Any:
@@ -112,7 +118,7 @@ class M2Wrapper(Qwen3Wrapper):
                 return (hidden,) + outputs[1:]
             return hidden
 
-        handles.append(layer_module.register_forward_hook(hook))
+        handles.append(self.last_norm.register_forward_hook(hook))
         try:
             yield
         finally:
@@ -199,7 +205,11 @@ class LTVWrapper(M2Wrapper):
     def inject_adaptive_task_vector(self, adaptive_matrix: Optional[torch.Tensor] = None) -> Iterator[None]:
         """Context manager to inject adaptive task vectors."""
         """
-        Add W · h_zero(label) to label hidden at the last decoder layer.
+        Add W · h_zero(label) to label hidden at the model's final norm
+        output (self.last_norm) -- the same post-norm space
+        extract_adaptive_task_vector fits W on (hidden_states[-1] is
+        post-norm). Hooking the raw decoder layer instead would apply W to
+        a different, pre-norm vector space than it was fit on.
         """
         if adaptive_matrix is None:
             adaptive_matrix = self.adaptive_matrix
@@ -207,8 +217,6 @@ class LTVWrapper(M2Wrapper):
             raise ValueError("No adaptive task vector. Run extract_adaptive_task_vector first.")
 
         W = adaptive_matrix.to(self.device)
-        layer_idx = self.num_layers - 1
-        layer_module = self._get_nested_attr(self._get_arribute_path(layer_idx, "hidden"))
         handles = []
         self.injected_deltas = []
 
@@ -232,7 +240,7 @@ class LTVWrapper(M2Wrapper):
                 return (hidden,) + outputs[1:]
             return hidden
 
-        handles.append(layer_module.register_forward_hook(hook))
+        handles.append(self.last_norm.register_forward_hook(hook))
         try:
             yield
         finally:
